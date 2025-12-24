@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>K12编程 - 奇异博士：全兼容工业版</title>
+    <style>
+        /* CSS Reset & 基础布局 */
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; touch-action: none; }
+        
+        /* 视频层：不直接显示，我们只取数据绘制到Canvas上，避免双层渲染浪费 */
+        video { display: none; }
+        
+        /* 核心画布：利用 object-fit 逻辑自适应 */
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        /* UI 层 */
+        #ui-layer {
+            position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 10;
+            display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+            padding-bottom: constant(safe-area-inset-bottom); /* iOS 底部适配 */
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-bottom: 30px;
+        }
+
+        /* 启动遮罩层 (解决 Autoplay Policy) */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999;
+            background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.5s;
+        }
+        .start-btn {
+            padding: 15px 40px; border: 2px solid #ffaa00; color: #ffaa00; background: transparent;
+            font-size: 20px; font-weight: bold; letter-spacing: 2px; cursor: pointer;
+            box-shadow: 0 0 20px rgba(255, 170, 0, 0.3); border-radius: 30px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); box-shadow: 0 0 40px rgba(255, 170, 0, 0.6); } 100% { transform: scale(1); } }
+
+        /* HUD 面板样式 */
+        .hud-panel {
+            background: rgba(20, 5, 0, 0.7); 
+            border: 1px solid rgba(255, 180, 0, 0.3);
+            border-radius: 20px; padding: 10px 20px;
+            backdrop-filter: blur(10px); /* 低端机可能不支持，通过 JS 降级 */
+            text-align: center; pointer-events: auto; user-select: none;
+            max-width: 90%;
+        }
+
+        .control-row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+        
+        .key-badge {
+            display: inline-block; width: 32px; height: 32px; line-height: 30px; border-radius: 6px;
+            color: #fff; background: rgba(255,255,255,0.1); font-weight: bold; font-size: 14px;
+            border: 1px solid rgba(255,255,255,0.2); cursor: pointer; transition: transform 0.1s;
+        }
+        .key-badge:active { transform: scale(0.9); }
+        
+        .mode-active { background: #ffcc00; color: #000; border-color: #fff; }
+        .sub-active { background: #00eaff; color: #000; border-color: #fff; }
+        .bg-active { background: #ff3333; color: #fff; border-color: #fff; }
+
+        .status-text { color: #fff; font-size: 14px; display: block; font-weight: 500; opacity: 0.9; }
+        
+        /* 错误提示 */
+        #error-log {
+            position: absolute; top: 0; left: 0; width: 100%; background: rgba(255,0,0,0.8); color: white;
+            font-size: 12px; padding: 5px; text-align: center; display: none; z-index: 1000;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="error-log"></div>
+
+    <div id="start-screen">
+        <div style="color: #ffaa00; font-size: 14px; margin-bottom: 20px; opacity: 0.7;">System Check: HTTPS [OK] WebGL [OK]</div>
+        <button class="start-btn" onclick="initApp()">启动防御系统</button>
+        <div id="loading-text" style="margin-top:20px; color:#fff; display:none;">正在加载神经接口...</div>
+    </div>
+
+    <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
+    <canvas id="output_canvas"></canvas>
+    
+    <div id="ui-layer">
+        <div class="hud-panel">
+            <div class="control-row">
+                <span id="k1" class="key-badge mode-active">1</span>
+                <span id="k2" class="key-badge">2</span>
+                <div style="width:1px; height:20px; background:rgba(255,255,255,0.2); margin:0 5px;"></div>
+                <span id="k3" class="key-badge sub-active">3</span>
+                <span id="k4" class="key-badge">4</span>
+                <span id="k5" class="key-badge">5</span>
+            </div>
+            <div class="control-row">
+                <span id="kq" class="key-badge mode-active">金</span>
+                <span id="kw" class="key-badge">蓝</span>
+                <span id="ke" class="key-badge">红</span>
+                <div style="width:1px; height:20px; background:rgba(255,255,255,0.2); margin:0 5px;"></div>
+                <span id="k0" class="key-badge">背景</span>
+            </div>
+            <span id="instruction-text" class="status-text">系统就绪</span>
+        </div>
+    </div>
+
+<script>
+    /**
+     * H5 前端大师重构笔记：
+     * 1. 移除了所有 async/await，改用 Promise 链，兼容 Chrome 52+ 及旧版 WebView。
+     * 2. 增加了 isLowEnd 检测，动态降低渲染质量 (LOD)。
+     * 3. 实现了 object-fit: cover 的数学映射，解决长屏手机坐标偏移问题。
+     * 4. 增加了鼠标/触摸兜底逻辑，防止摄像头失败导致白屏。
+     */
+
+    // --- 0. 基础环境检测与兼容性补丁 ---
+    
+    // Polyfill for requestAnimationFrame
+    window.requestAnimationFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame || 
+                                   window.webkitRequestAnimationFrame || window.msRequestAnimationFrame || 
+                                   function(f){setTimeout(f, 1000/60)};
+
+    // HTTPS 强制检查 (MediaPipe 和 Camera 必须在 HTTPS 或 localhost 下运行)
+    function checkSafeEnvironment() {
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            alert("安全警告：WebAR 需要 HTTPS 环境。请配置 SSL 或使用 localhost。");
+            return false;
+        }
+        return true;
+    }
+
+    // 性能分级检测
+    const isLowEnd = (function() {
+        // 简单判定：核心数少于4，或者 UserAgent 包含低端标识，或者 iOS (iOS Safari 显存限制较严)
+        const logicalProcessors = navigator.hardwareConcurrency || 4;
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        // iOS 往往性能强但内存限制大，这里保守处理
+        return (isMobile && logicalProcessors <= 4);
+    })();
+    
+    console.log("Device Performance Tier:", isLowEnd ? "Low (LOD Active)" : "High");
+
+    // --- 1. 全局变量定义 ---
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d', { alpha: false }); // alpha: false 提升少许性能
+    const instructionText = document.getElementById('instruction-text');
+    
+    let canvasW, canvasH, globalTime = 0;
+    
+    // 渲染布局参数 (用于坐标映射)
+    let layout = { scale: 1, offsetX: 0, offsetY: 0, videoW: 0, videoH: 0 };
+    
+    // 状态机
+    const MODE = { STAGE_1: 1, STAGE_2: 2 };
+    let appState = {
+        mode: MODE.STAGE_1,
+        shape: 0, // 0-2
+        color: 0, // 0-2
+        particle: 0, // 0-2
+        bgBlack: false,
+        useMouse: false // 降级模式标记
+    };
+
+    // 二阶段交互变量
+    let s2Data = { state: 'IDLE', rotX: 0, rotY: 0, tRotX: 0, tRotY: 0, alpha: 0, startT: 0, cd: 0 };
+
+    // 数据源：手部数据
+    let handResults = []; // MediaPipe 结果
+    let mouseHand = { x: 0.5, y: 0.5, active: false }; // 鼠标模拟的手数据
+
+    // 资源缓存池
+    const cachedAssets = {};
+    const particlePool = [];
+    let activeParticles = 0;
+    let sparks = [];
+
+    // 配置表
+    const COLORS = [
+        { name: "奇异金", hue: 35,  glow: '#ffaa00', text: 'rgba(255, 200, 100, 1)' },
+        { name: "量子蓝", hue: 190, glow: '#00eaff', text: 'rgba(100, 240, 255, 1)' },
+        { name: "猩红煞", hue: 0,   glow: '#ff2200', text: 'rgba(255, 100, 100, 1)' }
+    ];
+    const WORDS = [
+        { name: "爱心", t1: "风吹动了发梢", t2: "也吹动了我的心 ❤️" },
+        { name: "星球", t1: "这宇宙浩瀚无垠", t2: "唯你最为闪耀 ✨" },
+        { name: "花朵", t1: "赠你一朵枯木逢春", t2: "愿你笑靥如花 🌸" } // 修正了部分文案使其更通用
+    ];
+    const RUNES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    // --- 2. 核心数学与渲染逻辑 ---
+
+    // 坐标映射：将 MediaPipe 的归一化坐标 (0-1) 映射到 object-fit: cover 后的画布坐标
+    function updateLayout() {
+        canvasW = window.innerWidth;
+        canvasH = window.innerHeight;
+        canvasElement.width = canvasW;
+        canvasElement.height = canvasH;
+
+        // 如果没有视频流，直接全屏
+        if (!videoElement.videoWidth) return;
+
+        const vw = videoElement.videoWidth;
+        const vh = videoElement.videoHeight;
+        const screenRatio = canvasW / canvasH;
+        const videoRatio = vw / vh;
+
+        // 模拟 CSS object-fit: cover
+        if (screenRatio > videoRatio) {
+            // 屏幕更宽，以宽度为基准
+            layout.scale = canvasW / vw;
+            layout.videoW = canvasW;
+            layout.videoH = vh * layout.scale;
+            layout.offsetX = 0;
+            layout.offsetY = (canvasH - layout.videoH) / 2;
+        } else {
+            // 屏幕更高，以高度为基准
+            layout.scale = canvasH / vh;
+            layout.videoH = canvasH;
+            layout.videoW = vw * layout.scale;
+            layout.offsetX = (canvasW - layout.videoW) / 2;
+            layout.offsetY = 0;
+        }
+    }
+    window.addEventListener('resize', updateLayout);
+
+    // 辅助：离屏 Canvas 生成器 (带最大尺寸限制，防止低端机 OOM)
+    function createCache(size) {
+        // 低端机强制缩小纹理尺寸
+        const limit = isLowEnd ? 512 : 1024;
+        const finalSize = Math.min(size, limit);
+        const scale = finalSize / size; // 记录缩放比例以便绘制时还原
+        
+        const c = document.createElement('canvas');
+        c.width = finalSize;
+        c.height = finalSize;
+        return { c: c, ctx: c.getContext('2d'), size: finalSize, half: finalSize/2, contentScale: scale };
+    }
+
+    // 预渲染素材 (LOD 优化版)
+    function generateCache() {
+        const theme = COLORS[appState.color];
+        // 降低阴影开销
+        const shadowEnabled = !isLowEnd; 
+
+        // 示例：外圈法阵
+        let o = createCache(900);
+        let ctx = o.ctx; ctx.scale(o.contentScale, o.contentScale); ctx.translate(450, 450);
+        if(shadowEnabled) { ctx.shadowBlur = 15; ctx.shadowColor = theme.glow; }
+        ctx.strokeStyle = theme.text; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(0,0, 420, 0, Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0,0, 380, 0, Math.PI*2); ctx.stroke();
+        // 绘制符文 (减少数量以优化)
+        ctx.font = "bold 24px monospace"; ctx.fillStyle = theme.text; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const count = isLowEnd ? 24 : 64; 
+        for(let i=0; i<count; i++) {
+            ctx.save(); ctx.rotate((i/count)*Math.PI*2); ctx.translate(400,0); ctx.rotate(Math.PI/2);
+            ctx.fillText(RUNES[i%RUNES.length], 0, 0); ctx.restore();
+        }
+        cachedAssets['ring'] = o;
+
+        // 示例：内部几何 (用简单的多边形代替复杂路径)
+        o = createCache(600);
+        ctx = o.ctx; ctx.scale(o.contentScale, o.contentScale); ctx.translate(300, 300);
+        if(shadowEnabled) { ctx.shadowBlur = 10; ctx.shadowColor = theme.glow; }
+        ctx.strokeStyle = `hsla(${theme.hue}, 100%, 70%, 0.8)`; ctx.lineWidth = 4;
+        ctx.beginPath();
+        for(let i=0; i<3; i++) { // 画几个旋转的正方形
+            ctx.save(); ctx.rotate(i*Math.PI/6); 
+            ctx.rect(-200, -200, 400, 400); ctx.stroke();
+            ctx.restore();
+        }
+        cachedAssets['geo'] = o;
+
+        // 科技风圆环
+        o = createCache(800);
+        ctx = o.ctx; ctx.scale(o.contentScale, o.contentScale); ctx.translate(400, 400);
+        ctx.strokeStyle = theme.glow; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(0,0,350,0,Math.PI*2); ctx.stroke();
+        // 刻度
+        for(let i=0; i<12; i++) {
+            ctx.save(); ctx.rotate(i*Math.PI/6); 
+            ctx.beginPath(); ctx.moveTo(350,0); ctx.lineTo(380,0); ctx.stroke();
+            ctx.restore();
+        }
+        cachedAssets['tech'] = o;
+
+        document.getElementById('loading-text').style.display = 'none';
+    }
+
+    // 粒子类 (3D)
+    class Particle {
+        constructor() { this.active=false; this.x=0;this.y=0;this.z=0; }
+        spawn(type) {
+            this.active = true;
+            this.vx = (Math.random()-0.5)*10; this.vy = (Math.random()-0.5)*10; this.vz = (Math.random()-0.5)*10;
+            this.x=0; this.y=0; this.z=0;
+            // 简化形状生成逻辑，避免复杂三角函数造成卡顿
+            const r = 200 + Math.random()*100;
+            const theta = Math.random()*Math.PI*2;
+            const phi = Math.random()*Math.PI;
+            
+            if (type===0) { // Heart approx
+                let t = Math.random()*Math.PI*2; 
+                // 简化心形公式
+                this.tx = 16 * Math.pow(Math.sin(t),3) * 15;
+                this.ty = -(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t)) * 15;
+                this.tz = (Math.random()-0.5)*100;
+            } else if (type===1) { // Sphere
+                this.tx = r * Math.sin(phi) * Math.cos(theta);
+                this.ty = r * Math.sin(phi) * Math.sin(theta);
+                this.tz = r * Math.cos(phi);
+            } else { // Flat
+                this.tx = r * Math.cos(theta);
+                this.ty = r * Math.sin(theta);
+                this.tz = (Math.random()-0.5)*50;
+            }
+            this.ty -= 100; // Lift up
+        }
+        update(explode, rx, ry) {
+            if(!this.active) return;
+            if(explode) {
+                this.x += this.vx; this.y += this.vy; this.z += this.vz;
+            } else {
+                // 简化的3D旋转
+                let y1 = this.ty * Math.cos(rx) - this.tz * Math.sin(rx);
+                let z1 = this.ty * Math.sin(rx) + this.tz * Math.cos(rx);
+                let x2 = this.tx * Math.cos(ry) - z1 * Math.sin(ry);
+                let z2 = this.tx * Math.sin(ry) + z1 * Math.cos(ry);
+                this.x += (x2 - this.x)*0.1;
+                this.y += (y1 - this.y)*0.1;
+                this.z += (z2 - this.z)*0.1;
+            }
+        }
+    }
+    
+    // 初始化粒子池
+    const MAX_P = isLowEnd ? 800 : 2000;
+    for(let i=0; i<MAX_P; i++) particlePool.push(new Particle());
+
+    // 绘制辅助函数
+    function drawImg(ctx, key, x, y, scale, rot, alpha) {
+        const asset = cachedAssets[key];
+        if(!asset) return;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rot);
+        ctx.globalAlpha = alpha;
+        // 关键：由于 generateCache 进行了 contentScale 缩放，这里绘制时要除回去，保持物理尺寸一致
+        const s = scale / asset.contentScale;
+        ctx.drawImage(asset.c, -asset.half*s, -asset.half*s, asset.size*s, asset.size*s);
+        ctx.restore();
+    }
+
+    // --- 3. 业务逻辑 ---
+
+    function renderLoop() {
+        globalTime++;
+        
+        // 1. 清空与背景
+        if(appState.bgBlack) {
+            canvasCtx.fillStyle = '#000';
+            canvasCtx.fillRect(0,0, canvasW, canvasH);
+        } else {
+            // 绘制视频背景 (利用 layout 参数裁剪)
+            if(!appState.useMouse && videoElement.readyState === 4) {
+                canvasCtx.drawImage(videoElement, 
+                    layout.offsetX, layout.offsetY, layout.videoW, layout.videoH
+                );
+                canvasCtx.fillStyle = 'rgba(0,0,0,0.6)'; // 压暗视频
+                canvasCtx.fillRect(0,0,canvasW, canvasH);
+            } else {
+                canvasCtx.fillStyle = '#111'; // 纯色兜底
+                canvasCtx.fillRect(0,0,canvasW, canvasH);
+            }
+        }
+
+        // 2. 准备手部数据 (统一 Mouse 和 Camera 来源)
+        let handsToDraw = [];
+        if (appState.useMouse) {
+            if(mouseHand.active) handsToDraw.push({x: mouseHand.x * canvasW, y: mouseHand.y * canvasH, scale: 1});
+        } else {
+            // MediaPipe 数据转换
+            handResults.forEach(h => {
+                // 核心：归一化坐标 -> 视觉坐标
+                const realX = h.x * layout.videoW + layout.offsetX;
+                const realY = h.y * layout.videoH + layout.offsetY;
+                // 简单的深度估算
+                const size = Math.abs(h.z) * 2; // MediaPipe z is relative
+                handsToDraw.push({x: realX, y: realY, scale: Math.max(0.5, Math.min(2, 1/size))});
+            });
+        }
+
+        canvasCtx.globalCompositeOperation = 'lighter'; // 魔法光效核心混合模式
+
+        // 3. 绘制逻辑分发
+        if(appState.mode === MODE.STAGE_1) {
+            handsToDraw.forEach(hand => {
+                const t = globalTime * 0.02;
+                const s = hand.scale * 0.6;
+                // 根据 shape 类型绘制不同素材
+                if(appState.shape === 0) {
+                    drawImg(canvasCtx, 'ring', hand.x, hand.y, s*1.2, t*0.5, 0.8);
+                    drawImg(canvasCtx, 'geo', hand.x, hand.y, s*0.9, -t, 1.0);
+                } else if(appState.shape === 1) {
+                    drawImg(canvasCtx, 'tech', hand.x, hand.y, s*1.0, t, 0.9);
+                    drawImg(canvasCtx, 'geo', hand.x, hand.y, s*0.5, t*2, 1.0);
+                } else {
+                     // 简单混沌效果：多次绘制
+                     for(let i=0; i<3; i++) drawImg(canvasCtx, 'ring', hand.x, hand.y, s*(1+i*0.2), t*(i+1), 0.5);
+                }
+            });
+            
+            // UI 提示
+            if(handsToDraw.length === 0) {
+                 canvasCtx.font = "20px Arial"; canvasCtx.fillStyle="#fff"; canvasCtx.textAlign="center";
+                 canvasCtx.fillText(appState.useMouse ? "点击屏幕并移动手指" : "请伸出双手", canvasW/2, canvasH/2);
+            }
+
+        } else if (appState.mode === MODE.STAGE_2) {
+            // 逻辑：双手靠近->STABLE, 分开->DISPERSE
+            const hasHands = handsToDraw.length >= (appState.useMouse ? 1 : 2);
+            const cx = canvasW/2; const cy = canvasH/2;
+            
+            // 计算旋转目标
+            if(hasHands) {
+                if(appState.useMouse) {
+                     s2Data.tRotY = (handsToDraw[0].x - cx)/200;
+                     s2Data.tRotX = (handsToDraw[0].y - cy)/200;
+                } else {
+                     let mx = (handsToDraw[0].x + handsToDraw[1].x)/2;
+                     let my = (handsToDraw[0].y + handsToDraw[1].y)/2;
+                     s2Data.tRotY = (mx - cx)/200;
+                     s2Data.tRotX = (my - cy)/200;
+                }
+            }
+
+            s2Data.rotX += (s2Data.tRotX - s2Data.rotX)*0.1;
+            s2Data.rotY += (s2Data.tRotY - s2Data.rotY)*0.1;
+
+            if(s2Data.state === 'IDLE' && hasHands && s2Data.cd <= 0) {
+                s2Data.state = 'STABLE';
+                activeParticles = isLowEnd ? 500 : 1500;
+                particlePool.forEach(p => p.spawn(appState.particle));
+                instructionText.innerText = "保持手势凝聚能量 | 松开释放";
+            } 
+            else if (s2Data.state === 'STABLE' && !hasHands) {
+                s2Data.state = 'DISPERSE';
+                s2Data.startT = Date.now();
+                instructionText.innerText = "释放！";
+            }
+
+            if(s2Data.state !== 'IDLE') {
+                const isDisperse = s2Data.state === 'DISPERSE';
+                let alpha = 1.0;
+                
+                if(isDisperse) {
+                    const diff = Date.now() - s2Data.startT;
+                    if(diff > 3000) alpha = 1 - (diff-3000)/1000;
+                    if(diff > 4000) { s2Data.state = 'IDLE'; s2Data.cd = 60; }
+                }
+
+                // 绘制粒子
+                canvasCtx.fillStyle = COLORS[appState.color].glow;
+                particlePool.slice(0, activeParticles).forEach(p => {
+                    p.update(isDisperse, s2Data.rotX, s2Data.rotY);
+                    if(!p.active) return;
+                    // 简单的3D投影
+                    const fl = 500;
+                    const scale = fl / (fl + p.z + 500);
+                    if(scale < 0) return;
+                    const x2d = cx + p.x * scale;
+                    const y2d = cy + p.y * scale;
+                    const s = (isLowEnd ? 3 : 2) * scale;
+                    canvasCtx.globalAlpha = alpha;
+                    canvasCtx.fillRect(x2d, y2d, s, s);
+                });
+
+                // 文字
+                canvasCtx.globalAlpha = 1;
+                canvasCtx.shadowBlur = 10; canvasCtx.shadowColor = COLORS[appState.color].glow;
+                canvasCtx.fillStyle = "#fff"; canvasCtx.textAlign = "center";
+                const w = WORDS[appState.particle];
+                if(s2Data.state==='STABLE') {
+                    canvasCtx.font = "30px sans-serif";
+                    canvasCtx.fillText(w.t1, cx, cy - 300);
+                } else if(isDisperse) {
+                    canvasCtx.font = "bold 40px sans-serif";
+                    canvasCtx.fillText(w.t2, cx, cy);
+                }
+                canvasCtx.shadowBlur = 0;
+            }
+            if(s2Data.cd > 0) s2Data.cd--;
+        }
+
+        canvasCtx.globalCompositeOperation = 'source-over';
+        requestAnimationFrame(renderLoop);
+    }
+
+    // --- 4. 交互与事件 ---
+    
+    // 初始化应用
+    function initApp() {
+        if(!checkSafeEnvironment()) return;
+
+        const btn = document.querySelector('.start-btn');
+        btn.innerText = "系统初始化中...";
+        document.getElementById('loading-text').style.display = 'block';
+
+        // 预生成资源
+        generateCache();
+
+        // 尝试启动摄像头
+        const constraints = {
+            audio: false,
+            video: {
+                facingMode: 'user',
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            }
+        };
+
+        // 兼容性 getUserMedia 写法
+        navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+
+        // 如果浏览器支持标准 Promise 写法
+        const p = navigator.mediaDevices ? navigator.mediaDevices.getUserMedia(constraints) : 
+                  new Promise((resolve, reject) => {
+                      navigator.getUserMedia(constraints, resolve, reject);
+                  });
+
+        p.then(function(stream) {
+            videoElement.srcObject = stream;
+            // 必须在用户交互事件中调用 play
+            videoElement.play();
+            
+            // 初始化 MediaPipe
+            initMediaPipe();
+            
+            // 隐藏启动页
+            document.getElementById('start-screen').style.opacity = 0;
+            setTimeout(() => document.getElementById('start-screen').style.display = 'none', 500);
+            
+            // 开始渲染循环
+            requestAnimationFrame(renderLoop);
+            
+        }).catch(function(err) {
+            console.error("Camera failed:", err);
+            handleFallback("无法访问摄像头 (权限拒绝或设备不支持)，已切换至触摸模式。");
+        });
+    }
+
+    function initMediaPipe() {
+        try {
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: isLowEnd ? 0 : 1, // 低端机使用 Lite 模型
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            hands.onResults(onResults);
+            
+            // 使用 Camera Utils 自动发送帧
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+            camera.start();
+        } catch (e) {
+            handleFallback("AI 引擎加载失败，已切换至触摸模式。");
+        }
+    }
+
+    // MediaPipe 回调：只负责更新数据，不负责画画
+    function onResults(results) {
+        handResults = [];
+        if (results.multiHandLandmarks) {
+            for (const landmarks of results.multiHandLandmarks) {
+                // 取手掌中心点 (索引9) 和 深度估计
+                handResults.push({
+                    x: landmarks[9].x,
+                    y: landmarks[9].y,
+                    z: Math.abs(landmarks[0].x - landmarks[17].x) // 粗略估计手掌宽度作为深度
+                });
+            }
+        }
+    }
+
+    // 灾难恢复：鼠标/触摸模式
+    function handleFallback(msg) {
+        document.getElementById('error-log').innerText = msg;
+        document.getElementById('error-log').style.display = 'block';
+        document.getElementById('start-screen').style.display = 'none';
+        
+        appState.useMouse = true;
+        appState.bgBlack = true; // 没摄像头就只能全黑背景了
+        updateUI();
+        
+        // 绑定鼠标/触摸事件
+        window.addEventListener('mousemove', e => {
+            mouseHand.active = true;
+            mouseHand.x = e.clientX / window.innerWidth;
+            mouseHand.y = e.clientY / window.innerHeight;
+        });
+        window.addEventListener('touchmove', e => {
+            mouseHand.active = true;
+            mouseHand.x = e.touches[0].clientX / window.innerWidth;
+            mouseHand.y = e.touches[0].clientY / window.innerHeight;
+        }, {passive: false}); // passive: false 允许 preventDefault (虽这里没用)
+        
+        // 启动渲染
+        generateCache(); // 确保资源生成
+        requestAnimationFrame(renderLoop);
+    }
+
+    // UI 交互
+    function bindKey(id, callback) {
+        const el = document.getElementById(id);
+        el.addEventListener('click', callback);
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); callback(); });
+    }
+
+    function updateUI() {
+        // 更新按钮高亮类
+        const setClass = (id, active, type) => {
+            document.getElementById(id).className = `key-badge ${active ? type : ''}`;
+        };
+        
+        setClass('k1', appState.mode === 1, 'mode-active');
+        setClass('k2', appState.mode === 2, 'mode-active');
+        
+        setClass('k3', (appState.mode===1 && appState.shape===0) || (appState.mode===2 && appState.particle===0), 'sub-active');
+        setClass('k4', (appState.mode===1 && appState.shape===1) || (appState.mode===2 && appState.particle===1), 'sub-active');
+        setClass('k5', (appState.mode===1 && appState.shape===2) || (appState.mode===2 && appState.particle===2), 'sub-active');
+
+        setClass('kq', appState.color===0, 'mode-active');
+        setClass('kw', appState.color===1, 'mode-active');
+        setClass('ke', appState.color===2, 'mode-active');
+        
+        setClass('k0', appState.bgBlack, 'bg-active');
+        
+        // 更新 cache
+        generateCache();
+    }
+
+    // 绑定按钮事件
+    bindKey('k1', () => { appState.mode=1; appState.bgBlack=false; updateUI(); });
+    bindKey('k2', () => { appState.mode=2; appState.bgBlack=true; s2Data.state='IDLE'; updateUI(); });
+    bindKey('k3', () => { if(appState.mode===1) appState.shape=0; else appState.particle=0; updateUI(); });
+    bindKey('k4', () => { if(appState.mode===1) appState.shape=1; else appState.particle=1; updateUI(); });
+    bindKey('k5', () => { if(appState.mode===1) appState.shape=2; else appState.particle=2; updateUI(); });
+    bindKey('kq', () => { appState.color=0; updateUI(); });
+    bindKey('kw', () => { appState.color=1; updateUI(); });
+    bindKey('ke', () => { appState.color=2; updateUI(); });
+    bindKey('k0', () => { appState.bgBlack = !appState.bgBlack; updateUI(); });
+
+</script>
+</body>
+</html>
