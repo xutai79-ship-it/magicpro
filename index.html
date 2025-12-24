@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>K12编程 - 奇异博士：极速优能版</title>
     <style>
-        /* 基础样式保持不变，新增遮罩层样式 */
+        /* 基础样式 - 增加防误触和全屏适配 */
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; -webkit-tap-highlight-color: transparent; }
         canvas { display: block; position: absolute; top: 0; left: 0; }
         
@@ -23,7 +23,7 @@
             z-index: 5; transition: opacity 0.5s;
         }
 
-        /* 启动遮罩：解决自动播放问题并作为加载屏 */
+        /* [新增] 启动遮罩：解决浏览器禁止自动播放策略 */
         #start-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: #000; z-index: 9999;
@@ -44,7 +44,7 @@
             border-radius: 40px;
             padding: 15px 40px;
             backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px); /* iOS 兼容 */
+            -webkit-backdrop-filter: blur(20px);
             text-align: center;
             box-shadow: 0 0 80px rgba(255, 120, 0, 0.4);
             transform: scale(0.9); transition: all 0.3s;
@@ -125,15 +125,7 @@
     </div>
 
 <script>
-    /**
-     * H5前端大师 - 优化说明：
-     * 1. 移除了所有 async/await，使用 Promise 链式调用，兼容 Chrome 52+。
-     * 2. 实现了“算力分离”架构：渲染循环(60FPS) 与 识别循环(15-20FPS) 解耦。
-     * 3. 引入了 Object-Fit 算法，确保摄像头画面在任何屏幕比例下不变形、对齐准确。
-     * 4. 增加了启动遮罩，解决 AudioContext 和 Video 自动播放限制。
-     */
-
-    // --- Polyfills ---
+    // --- Polyfills (针对老旧浏览器核心兼容) ---
     window.requestAnimFrame = (function(){
         return  window.requestAnimationFrame       ||
                 window.webkitRequestAnimationFrame ||
@@ -186,7 +178,7 @@
         { name: "花朵", text1: "送你一朵花...", text2: "传说中的 随便花 🌸" }
     ];
 
-    // --- 视觉对齐与布局 ---
+    // --- [视觉对齐优化] Object-Fit: Cover 算法 ---
     var vidW = 0, vidH = 0;
     var drawInfo = { sx:0, sy:0, sw:0, sh:0, dx:0, dy:0, dw:0, dh:0 };
 
@@ -198,32 +190,21 @@
         updateDrawInfo();
     }
     
-    // 计算 Object-Fit: Cover 的裁剪参数
+    // 计算画面裁剪比例，确保特效与手指严格物理对齐，消除漂移
     function updateDrawInfo() {
         if (!vidW || !vidH) return;
         var screenRatio = canvasW / canvasH;
         var videoRatio = vidW / vidH;
-        
-        // 目标：填满屏幕 (Cover)
         var renderW, renderH;
+        // 模拟 CSS object-fit: cover 逻辑
         if (screenRatio > videoRatio) {
-            // 屏幕更宽，以宽度为基准
-            renderW = canvasW;
-            renderH = canvasW / videoRatio;
+            renderW = canvasW; renderH = canvasW / videoRatio;
         } else {
-            // 屏幕更高，以高度为基准
-            renderH = canvasH;
-            renderW = canvasH * videoRatio;
+            renderH = canvasH; renderW = canvasH * videoRatio;
         }
-        
-        // 居中偏移
         var offX = (canvasW - renderW) / 2;
         var offY = (canvasH - renderH) / 2;
-        
-        drawInfo = {
-            dw: renderW, dh: renderH,
-            dx: offX, dy: offY
-        };
+        drawInfo = { dw: renderW, dh: renderH, dx: offX, dy: offY };
     }
 
     window.addEventListener('resize', resize);
@@ -256,7 +237,6 @@
         var theme = COLOR_THEMES[colorType];
         
         var c, ctx;
-        // Mandala Outer
         c = createOffscreenCanvas(900); ctx = c.ctx; ctx.translate(450, 450);
         ctx.shadowBlur = 15; ctx.shadowColor = theme.glow; ctx.strokeStyle = theme.text; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.arc(0,0, 420, 0, Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.arc(0,0, 380, 0, Math.PI*2); ctx.stroke();
@@ -437,7 +417,7 @@
         this.opacity=0; this.active=false; this.scale=1; this.targetScale=1; 
     }
     MagicHand.prototype.update = function(detectedHand) {
-        // 运动插值核心：即使AI掉帧，这里也能以60FPS平滑移动
+        // [关键] 运动插值核心：即使AI掉帧，这里也能以60FPS平滑移动
         if (detectedHand) { 
             this.active=true; this.targetX=detectedHand.x; this.targetY=detectedHand.y; this.targetScale=detectedHand.scale; 
             this.opacity+=(1-this.opacity)*0.15; 
@@ -475,6 +455,7 @@
         ctx.restore();
     }
 
+    // 将 drawStage1 修改为接收缓存的手势数据
     function drawStage1(hands) {
         // 在 Render Loop 中更新插值，保持丝滑
         magicHands[0].update(hands[0]); 
@@ -535,7 +516,6 @@
     function drawStage2(hands) {
         if (s2Cooldown > 0) s2Cooldown--;
         
-        // 即使没有AI数据更新，插值也会继续，保证渲染不卡顿
         magicHands[0].update(hands[0]);
         magicHands[1].update(hands[1]);
 
@@ -684,16 +664,13 @@
         var detected = [];
         if (results.multiHandLandmarks) {
             results.multiHandLandmarks.forEach(function(lm) {
-                // 计算手势中心
                 var rawX = lm[9].x; 
                 var rawY = lm[9].y;
                 
-                // 【核心修复】：物理对齐映射
-                // 必须将 MediaPipe 的 0-1 坐标映射回基于 Object-Fit 裁剪后的屏幕坐标
+                // [关键修复]：物理对齐映射 - 将 MediaPipe 的 0-1 映射回裁切后的视频区域
                 var screenX = drawInfo.dx + rawX * drawInfo.dw;
                 var screenY = drawInfo.dy + rawY * drawInfo.dh;
                 
-                // 计算距离缩放
                 var dist = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
                 var scale = dist / 0.12; 
                 scale = Math.max(0.5, Math.min(2.5, scale));
@@ -707,6 +684,7 @@
     var frameCounter = 0;
     var isDetecting = false;
 
+    // [核心架构] 渲染主循环：不再依赖 Camera 类的 onFrame
     function processVideo() {
         // 1. 渲染背景
         canvasCtx.globalCompositeOperation = 'source-over';
@@ -742,8 +720,6 @@
 
         canvasCtx.globalCompositeOperation = 'source-over';
         if (currentMode === MODE.STAGE_1) {
-            // 这里传入 latestHandsData，MagicHand 会根据它进行平滑插值
-            // 如果 AI 这一帧没跑，latestHandsData 还是旧的，但 MagicHand 的 currentPos 会继续向 targetPos 移动
             drawStage1(latestHandsData);
             instructionText.innerText = latestHandsData.length < 2 ? "请伸出两只手激活法阵" : "";
         } else {
@@ -779,12 +755,12 @@
     initParticlePool();
     resize();
     
-    // 点击遮罩启动
+    // 点击遮罩启动 - [关键步骤]
     startOverlay.addEventListener('click', function() {
         startOverlay.style.display = 'none';
         loadingDiv.style.opacity = 1;
         
-        // 优先生成缓存
+        // 优先生成缓存，防止卡顿
         setTimeout(function() {
             generateCache();
             startCamera();
