@@ -3,60 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>K12编程 - 奇异博士：大师修正版</title>
+    <title>奇异博士 AR - 极速优化版</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; -webkit-tap-highlight-color: transparent; }
-        canvas { display: block; position: absolute; top: 0; left: 0; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
         
+        /* 启动遮罩：解决自动播放限制 */
+        #start-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 2000;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            cursor: pointer;
+        }
+        #start-btn {
+            padding: 15px 40px; border: 2px solid #ffaa00; border-radius: 50px;
+            color: #ffaa00; font-size: 24px; font-weight: bold; letter-spacing: 2px;
+            text-transform: uppercase; box-shadow: 0 0 30px rgba(255, 170, 0, 0.3);
+            background: rgba(20, 5, 0, 0.8); transition: all 0.3s;
+        }
+        #start-btn:active { transform: scale(0.95); background: #ffaa00; color: #000; }
+
         #ui-layer {
-            position: absolute; width: 100%; height: 100%; pointer-events: none;
+            position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 100;
             display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
             padding-bottom: 30px;
-            z-index: 10;
         }
 
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             color: #ffaa00; text-align: center; text-shadow: 0 0 60px #ff5500;
             font-size: 26px; font-weight: 900; letter-spacing: 4px;
-            z-index: 5; transition: opacity 0.5s;
+            z-index: 999; transition: opacity 0.5s; pointer-events: none;
         }
-
-        /* 启动遮罩：必须存在，否则 Audio/Video 会被浏览器拦截 */
-        #start-overlay {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: #000; z-index: 9999;
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-            cursor: pointer;
-        }
-        .start-btn {
-            padding: 15px 40px; border: 2px solid #ffaa00; color: #ffaa00;
-            font-size: 24px; font-weight: bold; border-radius: 50px;
-            box-shadow: 0 0 30px rgba(255, 170, 0, 0.4);
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
 
         .hud-panel {
             background: rgba(20, 5, 0, 0.85); 
             border: 2px solid rgba(255, 180, 0, 0.5);
             border-radius: 40px;
-            padding: 15px 40px;
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
+            padding: 15px 20px; /* Mobile optimized padding */
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
             text-align: center;
             box-shadow: 0 0 80px rgba(255, 120, 0, 0.4);
             transform: scale(0.9); transition: all 0.3s;
             pointer-events: auto; user-select: none; -webkit-user-select: none;
         }
 
-        .control-group { display: inline-flex; flex-direction: column; align-items: center; margin: 0 10px; }
+        .control-group { display: inline-flex; flex-direction: column; align-items: center; margin: 0 5px; }
         .group-label { font-size: 10px; color: #aaa; margin-bottom: 4px; font-weight: 700; text-transform: uppercase; }
         
         .key-badge {
-            display: inline-block; width: 30px; height: 30px; line-height: 30px; border-radius: 8px; margin: 0 2px; 
+            display: inline-block; width: 36px; height: 36px; line-height: 36px; border-radius: 8px; margin: 0 2px; 
             color: #fff; background: rgba(255,255,255,0.1); font-weight: 900; font-size: 14px;
-            border: 1px solid rgba(255,255,255,0.2); cursor: pointer; transition: all 0.2s; position: relative;
+            border: 1px solid rgba(255,255,255,0.2); cursor: pointer; transition: all 0.2s;
+            position: relative;
         }
         .key-badge:active { transform: scale(0.9) !important; background: rgba(255,255,255,0.3); }
 
@@ -65,58 +64,58 @@
         .bg-active { background: #ff3333; color: #fff; box-shadow: 0 0 15px #ff0000; border-color: #fff; }
 
         .status-text { 
-            color: #fff; font-size: 18px; margin-top: 12px; display: block; font-weight: 700; 
+            color: #fff; font-size: 16px; margin-top: 12px; display: block; font-weight: 700; 
             text-shadow: 0 0 15px rgba(255,150,0,0.8); letter-spacing: 1px;
         }
         .divider { display: inline-block; width: 1px; height: 25px; background: rgba(255,255,255,0.2); margin: 0 5px; vertical-align: middle; }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils@0.6/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
     <div id="start-overlay">
-        <div class="start-btn">点击启动魔法引擎</div>
-        <div style="margin-top:20px; color:#666; font-size:12px;">Initializing Neural Core...</div>
+        <div id="start-btn">TAP TO OPEN EYE</div>
+        <div style="color: #666; margin-top: 15px; font-size: 12px;">HTTPS REQUIRED | BEST ON CHROME</div>
     </div>
 
-    <div id="loading">LOADING ASSETS...</div>
-    <video id="input_video" playsinline style="display:none"></video>
+    <div id="loading" style="opacity: 0;">INITIALIZING CORE...</div>
+    <video id="input_video" style="display:none" playsinline webkit-playsinline></video>
     <canvas id="output_canvas"></canvas>
     
     <div id="ui-layer">
         <div class="hud-panel">
-            <div style="display:flex; align-items:center; justify-content:center;">
+            <div style="display:flex; align-items:center; justify-content:center; flex-wrap: nowrap;">
                 <div class="control-group">
                     <span class="group-label">Mode</span>
                     <div>
-                        <span id="k1" class="key-badge mode-active" data-key="1">1</span>
-                        <span id="k2" class="key-badge" data-key="2">2</span>
+                        <span id="k1" class="key-badge mode-active">1</span>
+                        <span id="k2" class="key-badge">2</span>
                     </div>
                 </div>
                 <div class="divider"></div>
                 <div class="control-group">
-                    <span class="group-label">Variant</span>
+                    <span class="group-label">Var</span>
                     <div>
-                        <span id="k3" class="key-badge sub-active" data-key="3">3</span>
-                        <span id="k4" class="key-badge" data-key="4">4</span>
-                        <span id="k5" class="key-badge" data-key="5">5</span>
+                        <span id="k3" class="key-badge sub-active">3</span>
+                        <span id="k4" class="key-badge">4</span>
+                        <span id="k5" class="key-badge">5</span>
                     </div>
                 </div>
                 <div class="divider"></div>
                 <div class="control-group">
                     <span class="group-label">Color</span>
                     <div>
-                        <span id="kq" class="key-badge mode-active" data-key="q">Q</span>
-                        <span id="kw" class="key-badge" data-key="w">W</span>
-                        <span id="ke" class="key-badge" data-key="e">E</span>
+                        <span id="kq" class="key-badge mode-active">Q</span>
+                        <span id="kw" class="key-badge">W</span>
+                        <span id="ke" class="key-badge">E</span>
                     </div>
                 </div>
                 <div class="divider"></div>
                 <div class="control-group">
                     <span class="group-label">BG</span>
-                    <div><span id="k0" class="key-badge" data-key="0">CAM</span></div>
+                    <div><span id="k0" class="key-badge">CAM</span></div>
                 </div>
             </div>
             <span id="instruction-text" class="status-text">SYSTEM READY</span>
@@ -124,38 +123,49 @@
     </div>
 
 <script>
-    // Polyfill 保证动画循环在任何浏览器都运行
+    // === 0. Polyfills & Compatibility (针对旧版浏览器) ===
     window.requestAnimFrame = (function(){
-        return  window.requestAnimationFrame || window.webkitRequestAnimationFrame || window.mozRequestAnimationFrame || function( callback ){ window.setTimeout(callback, 1000 / 60); };
+        return  window.requestAnimationFrame       ||
+                window.webkitRequestAnimationFrame ||
+                window.mozRequestAnimationFrame    ||
+                function( callback ){ window.setTimeout(callback, 1000 / 60); };
     })();
+    
+    // 安全检查
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        alert("WebAR requires HTTPS! Please switch protocol.");
+    }
 
     const videoElement = document.getElementById('input_video');
     const canvasElement = document.getElementById('output_canvas');
     const canvasCtx = canvasElement.getContext('2d');
     const loadingDiv = document.getElementById('loading');
     const instructionText = document.getElementById('instruction-text');
-    const startOverlay = document.getElementById('start-overlay');
     const bgKey = document.getElementById('k0');
+    const startOverlay = document.getElementById('start-overlay');
 
     let canvasW, canvasH, globalTime = 0;
     const MODE = { STAGE_1: 1, STAGE_2: 2 };
     let currentMode = MODE.STAGE_1;
     let shapeType = 0; 
     let colorType = 0; 
-    let particleType = 0; 
+    let particleType = 0;
     let isBlackBackground = false; 
 
-    // 核心修复：坐标适配参数
-    let drawInfo = { dx: 0, dy: 0, dw: 0, dh: 0 };
-    let vidW = 0, vidH = 0;
+    // === 性能优化配置 ===
+    let frameSkipCounter = 0;
+    const FRAME_SKIP_LIMIT = 2; // 每3帧执行一次AI检测 (优化核心)
+    let aiHandData = []; // 存储AI返回的最新原始数据
+    let lastRenderedHands = [null, null]; // 存储上一帧渲染时的平滑数据
 
+    // 二阶段变量
     let s2State = 'IDLE'; 
-    let currentRotX = 0, targetRotX = 0, currentRotY = 0, targetRotY = 0;
-    let sparks = []; 
-    let textAlpha = 0;
+    let currentRotX = 0; let targetRotX = 0; let currentRotY = 0; let targetRotY = 0;
+    let sparks = []; let textAlpha = 0;
     let disperseStartTime = 0; 
     let s2Cooldown = 0; 
 
+    // 对象池 (保持 2500 不变)
     const MAX_PARTICLES = 2500;
     const particlePool = [];
     let activeParticleCount = 0;
@@ -174,28 +184,16 @@
         { name: "花朵", text1: "送你一朵花...", text2: "传说中的 随便花 🌸" }
     ];
 
-    // [修复1] 物理对齐：确保画面不拉伸，坐标不漂移
     function resize() { 
-        canvasW = window.innerWidth; canvasH = window.innerHeight; 
-        canvasElement.width = canvasW; canvasElement.height = canvasH;
-        updateDrawInfo();
+        canvasW = window.innerWidth; 
+        canvasH = window.innerHeight; 
+        // 强制设置分辨率，避免高分屏下的性能损耗，如果设备像素比极高，这里可限制
+        canvasElement.width = canvasW; 
+        canvasElement.height = canvasH; 
     }
-    
-    function updateDrawInfo() {
-        if (!vidW || !vidH) return;
-        const screenRatio = canvasW / canvasH;
-        const videoRatio = vidW / vidH;
-        let renderW, renderH;
-        if (screenRatio > videoRatio) {
-            renderW = canvasW; renderH = canvasW / videoRatio;
-        } else {
-            renderH = canvasH; renderW = canvasH * videoRatio;
-        }
-        drawInfo = { dw: renderW, dh: renderH, dx: (canvasW - renderW) / 2, dy: (canvasH - renderH) / 2 };
-    }
-    window.addEventListener('resize', resize);
+    resize(); window.addEventListener('resize', resize);
 
-    // === 缓存生成 ===
+    // === 缓存生成 (保留原版逻辑) ===
     function createOffscreenCanvas(size) { const c = document.createElement('canvas'); c.width = size; c.height = size; return { canvas: c, ctx: c.getContext('2d'), size: size, half: size/2 }; }
     function drawPoly(ctx, r, sides) { ctx.beginPath(); ctx.moveTo(r, 0); for (let i = 1; i <= sides; i++) ctx.lineTo(r * Math.cos(i * 2 * Math.PI / sides), r * Math.sin(i * 2 * Math.PI / sides)); ctx.closePath(); ctx.stroke(); }
 
@@ -308,7 +306,7 @@
         loadingDiv.style.opacity = 0;
     }
     
-    // === 粒子类 ===
+    // === 粒子类 (保留) ===
     class Particle3D {
         constructor() { 
             this.x = 0; this.y = 0; this.z = 0;
@@ -325,14 +323,14 @@
             this.size = 3 + Math.random() * 4;
             
             const scale = canvasH / 25;
-            if (type === 0) { // Heart
+            if (type === 0) { 
                 let t = Math.random() * Math.PI * 2;
                 let z = (Math.random() * 2) - 1;
                 let d = Math.cos(z * Math.PI * 0.5);
                 this.tx = 16 * Math.pow(Math.sin(t), 3) * d * scale;
                 this.ty = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) * d * scale;
                 this.tz = z * 350;
-            } else if (type === 1) { // Planet
+            } else if (type === 1) { 
                 if(Math.random() > 0.3) {
                     let theta = Math.random() * Math.PI * 2;
                     let phi = Math.acos(2 * Math.random() - 1);
@@ -347,7 +345,7 @@
                     this.ty = r * Math.sin(theta) * 0.1;
                     this.tz = r * Math.sin(theta);
                 }
-            } else { // Flower
+            } else { 
                 let u = Math.random() * Math.PI * 2;
                 let v = Math.random() * Math.PI;
                 let rb = 400 * (1 + 0.3 * Math.cos(5 * u));
@@ -395,20 +393,31 @@
             particlePool.push(new Particle3D());
         }
     }
+    initParticlePool();
+    // 使用 setTimeout 确保UI先渲染
+    setTimeout(generateCache, 100); 
 
     class MagicHand {
         constructor() { this.x=canvasW/2; this.y=canvasH/2; this.targetX=canvasW/2; this.targetY=canvasH/2; this.opacity=0; this.active=false; this.scale=1; this.targetScale=1; }
-        update(detectedHand) {
-            // [修复2] 平滑插值：即使AI卡顿，渲染也不会卡顿
-            if (detectedHand) { 
-                this.active=true; this.targetX=detectedHand.x; this.targetY=detectedHand.y; this.targetScale=detectedHand.scale; 
+        // 渲染线程专用 Update: 负责平滑插值，不受 AI 帧率限制
+        update() {
+            if (this.active) { 
                 this.opacity+=(1-this.opacity)*0.15; 
             } else { 
-                this.active=false; this.opacity+=(0-this.opacity)*0.08; 
+                this.opacity+=(0-this.opacity)*0.08; 
             }
-            this.x+=(this.targetX-this.x)*0.25; this.y+=(this.targetY-this.y)*0.25;
+            // 经典的缓动公式：当前值 += (目标值 - 当前值) * 系数
+            // 系数 0.25 保证了在 60FPS 下非常平滑
+            this.x+=(this.targetX-this.x)*0.25; 
+            this.y+=(this.targetY-this.y)*0.25;
             this.scale+=(this.targetScale-this.scale)*0.1; 
         }
+        // AI 线程专用: 设置目标点
+        setTarget(x, y, s) {
+            this.active = true;
+            this.targetX = x; this.targetY = y; this.targetScale = s;
+        }
+        reset() { this.active = false; }
         getDrawPos() { return { x: this.x + (Math.random()-0.5)*this.opacity*3, y: this.y + (Math.random()-0.5)*this.opacity*3, op: this.opacity, scale: this.scale }; }
     }
     const magicHands = [new MagicHand(), new MagicHand()];
@@ -434,8 +443,10 @@
         ctx.restore();
     }
 
-    function drawStage1(hands) {
-        magicHands[0].update(hands[0]); magicHands[1].update(hands[1]);
+    function drawStage1() {
+        // 更新手部物理状态 (在渲染循环中调用，保证丝滑)
+        magicHands[0].update(); magicHands[1].update();
+        
         const time = globalTime * 0.02; 
         const BASE_SCALE = 0.45; 
         const theme = COLOR_THEMES[colorType];
@@ -474,7 +485,6 @@
             canvasCtx.restore();
 
             if (hand.active) {
-                // [修复3] 粒子发射：现在可以正确捕获到位置
                 canvasCtx.globalCompositeOperation = 'lighter';
                 const r = 400 * S; 
                 const count = 40; 
@@ -489,18 +499,20 @@
         });
     }
 
-    function drawStage2(hands) {
+    function drawStage2() {
         if (s2Cooldown > 0) s2Cooldown--;
+        
+        // 只有当两个手都活跃且不透明度足够时才算 "HasTwoHands"
+        const h0 = magicHands[0]; const h1 = magicHands[1];
+        h0.update(); h1.update();
 
-        magicHands[0].update(hands[0]); magicHands[1].update(hands[1]);
-
-        const hasTwoHands = hands.length === 2 || (magicHands[0].active && magicHands[1].active); 
+        const hasTwoHands = h0.active && h1.active && h0.opacity > 0.5 && h1.opacity > 0.5;
         const cx = canvasW / 2; const cy = canvasH / 2; 
         const conf = PARTICLE_CONFIG[particleType];
         
         if (hasTwoHands) { 
-            targetRotY = (((magicHands[0].x+magicHands[1].x)/2 - cx)/(canvasW/2)) * 3.0; 
-            targetRotX = (((magicHands[0].y+magicHands[1].y)/2 - cy)/(canvasH/2)) * 3.0; 
+            targetRotY = (((h0.x + h1.x)/2 - cx)/(canvasW/2)) * 3.0; 
+            targetRotX = (((h0.y + h1.y)/2 - cy)/(canvasH/2)) * 3.0; 
         } else { targetRotX=0; targetRotY=0; }
         
         currentRotX += (targetRotX - currentRotX)*0.1; 
@@ -558,6 +570,91 @@
         }
     }
 
+    // === 核心渲染循环 (Render Loop) ===
+    // 独立于 AI 帧率，保持 60FPS
+    function renderLoop() {
+        globalTime++;
+        canvasCtx.clearRect(0, 0, canvasW, canvasH);
+        canvasCtx.globalCompositeOperation = 'source-over';
+        
+        // 背景绘制：智能 Object-Fit Cover 算法
+        if (isBlackBackground) {
+            canvasCtx.fillStyle = '#000'; canvasCtx.fillRect(0, 0, canvasW, canvasH);
+        } else if (videoElement.videoWidth > 0) {
+            const vW = videoElement.videoWidth;
+            const vH = videoElement.videoHeight;
+            // 计算 Cover 比例
+            const scale = Math.max(canvasW / vW, canvasH / vH);
+            const drawW = vW * scale;
+            const drawH = vH * scale;
+            const offsetX = (canvasW - drawW) / 2;
+            const offsetY = (canvasH - drawH) / 2;
+            
+            canvasCtx.drawImage(videoElement, offsetX, offsetY, drawW, drawH);
+            canvasCtx.fillStyle = 'rgba(0,0,0,0.7)'; canvasCtx.fillRect(0,0,canvasW,canvasH);
+        }
+
+        // 绘制特效
+        canvasCtx.globalCompositeOperation = 'lighter'; 
+        for(let i=sparks.length-1; i>=0; i--) {
+            sparks[i].update();
+            sparks[i].draw(canvasCtx);
+            if(sparks[i].life <= 0) sparks.splice(i, 1);
+        }
+        
+        canvasCtx.globalCompositeOperation = 'source-over';
+        if (currentMode === MODE.STAGE_1) { 
+            drawStage1(); 
+            // 简单的文本提示逻辑
+            if (!magicHands[0].active && !magicHands[1].active) instructionText.innerText = "请伸出两只手激活法阵";
+        } else { 
+            drawStage2(); 
+        }
+
+        window.requestAnimFrame(renderLoop);
+    }
+
+    // === AI 数据处理 (On Results) ===
+    function onResults(results) {
+        // 这里只处理数据，不进行绘制
+        const detectedHands = []; 
+        if (results.multiHandLandmarks) {
+            // 需要重新计算坐标映射，与背景的 Object-Fit 逻辑保持一致
+            const vW = videoElement.videoWidth;
+            const vH = videoElement.videoHeight;
+            const scale = Math.max(canvasW / vW, canvasH / vH);
+            const drawW = vW * scale;
+            const drawH = vH * scale;
+            const offsetX = (canvasW - drawW) / 2;
+            const offsetY = (canvasH - drawH) / 2;
+
+            results.multiHandLandmarks.forEach(lm => { 
+                const dist = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
+                let s = dist / 0.12; s = Math.max(0.5, Math.min(2.5, s)); 
+                
+                // 坐标转换的核心公式
+                const screenX = lm[9].x * drawW + offsetX;
+                const screenY = lm[9].y * drawH + offsetY;
+
+                detectedHands.push({ x: screenX, y: screenY, scale: s }); 
+            }); 
+        }
+
+        // 将 AI 结果同步给 MagicHand 对象
+        // 我们的渲染循环会自动插值平滑这些数据
+        if (detectedHands.length > 0) {
+            magicHands[0].setTarget(detectedHands[0].x, detectedHands[0].y, detectedHands[0].scale);
+            if (detectedHands.length > 1) {
+                magicHands[1].setTarget(detectedHands[1].x, detectedHands[1].y, detectedHands[1].scale);
+            } else {
+                magicHands[1].reset();
+            }
+        } else {
+            magicHands[0].reset();
+            magicHands[1].reset();
+        }
+    }
+
     function handleInput(key) {
         const k = key.toLowerCase();
         
@@ -585,36 +682,55 @@
             if (k === 'q') colorType = 0; if (k === 'w') colorType = 1; if (k === 'e') colorType = 2;
             loadingDiv.style.opacity = 1; 
             updateUI();
-            requestAnimationFrame(() => setTimeout(generateCache, 10));
+            // 使用 setTimeout 让 UI 先刷新
+            setTimeout(function(){ generateCache(); }, 50);
         }
     }
 
-    // 绑定事件
     window.addEventListener('keydown', (e) => handleInput(e.key));
-    document.querySelectorAll('.key-badge').forEach(el => {
-        const trigger = (e) => { e.preventDefault(); e.stopPropagation(); handleInput(el.getAttribute('data-key')); };
-        el.addEventListener('click', trigger);
-        el.addEventListener('touchstart', trigger);
+
+    const clickMap = {
+        'k1': '1', 'k2': '2',
+        'k3': '3', 'k4': '4', 'k5': '5',
+        'kq': 'q', 'kw': 'w', 'ke': 'e',
+        'k0': '0'
+    };
+
+    Object.keys(clickMap).forEach(id => {
+        const el = document.getElementById(id);
+        if(el) {
+            // 同时支持 Touch 和 Click
+            el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); handleInput(clickMap[id]); });
+            el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); handleInput(clickMap[id]); });
+        }
     });
 
     function updateBgUI() { bgKey.className = `key-badge ${isBlackBackground ? 'bg-active' : ''}`; }
+    
     function setMode(m) { 
         currentMode = m; 
-        if (m === MODE.STAGE_1) isBlackBackground = false; else isBlackBackground = true; 
+        if (m === MODE.STAGE_1) isBlackBackground = false; 
+        else isBlackBackground = true; 
         resetStage2(); sparks = []; updateUI(); updateBgUI(); 
     }
+
     function resetStage2() { s2State = 'IDLE'; s2Cooldown = 0; }
+    
     function updateUI() {
         document.getElementById('k1').className = `key-badge ${currentMode===1?'mode-active':''}`;
         document.getElementById('k2').className = `key-badge ${currentMode===2?'mode-active':''}`;
+        
         const isS1 = currentMode === MODE.STAGE_1;
         document.getElementById('k3').className = `key-badge ${(isS1 && shapeType===0) || (!isS1 && particleType===0) ? 'sub-active' : ''}`;
         document.getElementById('k4').className = `key-badge ${(isS1 && shapeType===1) || (!isS1 && particleType===1) ? 'sub-active' : ''}`;
         document.getElementById('k5').className = `key-badge ${(isS1 && shapeType===2) || (!isS1 && particleType===2) ? 'sub-active' : ''}`;
+
         document.getElementById('kq').className = `key-badge ${colorType===0?'mode-active':''}`;
         document.getElementById('kw').className = `key-badge ${colorType===1?'mode-active':''}`;
         document.getElementById('ke').className = `key-badge ${colorType===2?'mode-active':''}`;
+        
         bgKey.className = `key-badge ${isBlackBackground?'bg-active':''}`;
+
         const theme = COLOR_THEMES[colorType];
         if (currentMode === MODE.STAGE_1) {
             instructionText.innerText = `法阵: ${['奇异曼陀罗','赛博科技','混沌裂缝'][shapeType]} | 颜色: ${theme.name}`;
@@ -623,94 +739,41 @@
         }
     }
 
-    // === [架构升级] AI与渲染分离 ===
-    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    // === 初始化序列 ===
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`});
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5, selfieMode: true });
-    
-    let latestHandsData = [];
-    let isDetecting = false;
-    let frameCounter = 0;
+    hands.onResults(onResults);
 
-    hands.onResults((results) => {
-        const detected = [];
-        if (results.multiHandLandmarks) {
-            results.multiHandLandmarks.forEach(lm => {
-                // [修复1] 坐标对齐：使用 drawInfo 进行映射
-                const screenX = drawInfo.dx + lm[9].x * drawInfo.dw;
-                const screenY = drawInfo.dy + lm[9].y * drawInfo.dh;
-                const dist = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
-                let scale = dist / 0.12; scale = Math.max(0.5, Math.min(2.5, scale));
-                detected.push({ x: screenX, y: screenY, scale: scale });
-            });
-        }
-        latestHandsData = detected;
-        isDetecting = false;
-    });
-
-    // 主渲染循环：60FPS 满帧运行
-    function processVideo() {
-        // 1. 渲染视频/背景
-        canvasCtx.globalCompositeOperation = 'source-over';
-        if (isBlackBackground) {
-            canvasCtx.fillStyle = '#000'; canvasCtx.fillRect(0, 0, canvasW, canvasH);
-        } else if (videoElement.readyState === 4) {
-            // [修复1] 绘制视频：使用 Object-Fit 参数
-            canvasCtx.drawImage(videoElement, drawInfo.dx, drawInfo.dy, drawInfo.dw, drawInfo.dh);
-            canvasCtx.fillStyle = 'rgba(0,0,0,0.7)'; canvasCtx.fillRect(0,0,canvasW,canvasH);
-        }
-
-        // 2. 发送 AI 识别请求 (节流模式，每3帧一次)
-        if (frameCounter % 3 === 0 && !isDetecting && videoElement.readyState === 4) {
-            isDetecting = true;
-            hands.send({image: videoElement});
-        }
-        frameCounter++;
-        globalTime++;
-
-        // 3. 渲染特效
-        // [修复2] 飞溅粒子
-        canvasCtx.globalCompositeOperation = 'lighter'; 
-        for(let i=sparks.length-1; i>=0; i--) {
-            sparks[i].update();
-            sparks[i].draw(canvasCtx);
-            if(sparks[i].life <= 0) sparks.splice(i, 1);
-        }
-
-        canvasCtx.globalCompositeOperation = 'source-over';
-        // [修复3] 这里使用插值后的 latestHandsData，保证流畅
-        if (currentMode === MODE.STAGE_1) {
-            drawStage1(latestHandsData);
-            instructionText.innerText = latestHandsData.length < 2 ? "请伸出两只手激活法阵" : "";
-        } else {
-            drawStage2(latestHandsData);
-        }
-
-        requestAnimFrame(processVideo);
-    }
-
-    function startCamera() {
-        const constraints = { video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
-        navigator.mediaDevices.getUserMedia(constraints).then(stream => {
-            videoElement.srcObject = stream;
-            videoElement.onloadedmetadata = () => {
-                vidW = videoElement.videoWidth; vidH = videoElement.videoHeight;
-                updateDrawInfo();
-                videoElement.play();
-                requestAnimFrame(processVideo); // 启动主循环
-            };
-        }).catch(err => alert("Camera Error: " + err));
-    }
-
-    // 初始化
-    initParticlePool();
-    resize();
-    
-    // 点击启动
-    startOverlay.addEventListener('click', () => {
+    // 启动序列：点击 -> 播放视频 -> 启动相机 -> 启动渲染循环
+    startOverlay.addEventListener('click', function() {
         startOverlay.style.display = 'none';
         loadingDiv.style.opacity = 1;
-        setTimeout(() => { generateCache(); startCamera(); }, 100);
+        
+        videoElement.play().then(function(){
+            // 视频播放成功后，启动 MediaPipe Camera
+            // 自定义 onFrame 逻辑以实现 Frame Skipping
+            const camera = new Camera(videoElement, {
+                onFrame: function() {
+                    // 节流逻辑：每 FRAME_SKIP_LIMIT 帧才发给 AI 一次
+                    frameSkipCounter++;
+                    if (frameSkipCounter % FRAME_SKIP_LIMIT === 0) {
+                        // 移除 async/await，使用 Promise
+                        return hands.send({image: videoElement});
+                    }
+                    return Promise.resolve();
+                },
+                width: 640, // 降低处理分辨率以提高性能
+                height: 480
+            });
+            camera.start();
+            
+            // 启动独立的渲染循环
+            renderLoop();
+        }).catch(function(e) {
+            alert("Camera failed: " + e);
+        });
     });
+
 </script>
 </body>
 </html>
