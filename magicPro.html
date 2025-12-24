@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>K12编程 - 奇异博士：Buffer修复版</title>
+    <style>
+        /* 基础样式 */
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        canvas { display: block; position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        video { display: none; }
+
+        /* UI 层 */
+        #ui-layer {
+            position: absolute; width: 100%; height: 100%; pointer-events: none;
+            display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+            padding-bottom: 30px; z-index: 10;
+        }
+
+        /* 启动引导层 (解决 Autoplay 和 初始化反馈) */
+        #splash-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 999;
+            background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.5s;
+        }
+        .loading-text {
+            color: #ffaa00; text-align: center; text-shadow: 0 0 20px #ff5500;
+            font-size: 24px; font-weight: 900; letter-spacing: 2px; margin-bottom: 20px;
+        }
+        .btn-start {
+            padding: 15px 40px; border: 2px solid #ffaa00; color: #ffaa00; background: transparent;
+            font-size: 18px; font-weight: bold; border-radius: 30px; cursor: pointer;
+            box-shadow: 0 0 15px rgba(255, 170, 0, 0.3); pointer-events: auto;
+            display: none; /* 加载完再显示 */
+        }
+        .btn-start:active { transform: scale(0.95); background: rgba(255,170,0,0.2); }
+
+        /* HUD 面板 */
+        .hud-panel {
+            background: rgba(20, 5, 0, 0.85); 
+            border: 2px solid rgba(255, 180, 0, 0.5);
+            border-radius: 40px; padding: 10px 20px;
+            backdrop-filter: blur(5px); text-align: center;
+            box-shadow: 0 0 50px rgba(255, 120, 0, 0.3);
+            transform: scale(0.9); pointer-events: auto;
+        }
+
+        .control-group { display: inline-flex; flex-direction: column; align-items: center; margin: 0 5px; }
+        .group-label { font-size: 10px; color: #aaa; margin-bottom: 4px; font-weight: 700; text-transform: uppercase; }
+        
+        .key-badge {
+            display: inline-block; width: 30px; height: 30px; line-height: 30px; border-radius: 8px; margin: 0 2px; 
+            color: #fff; background: rgba(255,255,255,0.1); font-weight: 900; font-size: 14px;
+            border: 1px solid rgba(255,255,255,0.2); cursor: pointer;
+        }
+        
+        .mode-active { background: #ffcc00; color: #000; box-shadow: 0 0 15px #ff8800; border-color: #fff; }
+        .sub-active { background: #00eaff; color: #000; box-shadow: 0 0 10px #00eaff; border-color: #fff; }
+        .bg-active { background: #ff3333; color: #fff; border-color: #fff; }
+
+        .status-text { color: #fff; font-size: 14px; margin-top: 8px; display: block; font-weight: 700; text-shadow: 0 0 10px rgba(255,150,0,0.8); }
+        .divider { display: inline-block; width: 1px; height: 25px; background: rgba(255,255,255,0.2); margin: 0 5px; vertical-align: middle; }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils@0.6/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="splash-screen">
+        <div class="loading-text" id="loading-msg">INITIALIZING CORE...</div>
+        <button id="btn-start" class="btn-start">启动魔法引擎</button>
+        <div id="err-log" style="color:red; font-size:12px; margin-top:10px; display:none;"></div>
+    </div>
+
+    <video id="input_video" playsinline webkit-playsinline></video>
+    <canvas id="output_canvas"></canvas>
+    
+    <div id="ui-layer">
+        <div class="hud-panel">
+            <div style="display:flex; align-items:center; justify-content:center;">
+                <div class="control-group">
+                    <span class="group-label">Mode</span>
+                    <div>
+                        <span id="k1" class="key-badge mode-active">1</span>
+                        <span id="k2" class="key-badge">2</span>
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="control-group">
+                    <span class="group-label">Style</span>
+                    <div>
+                        <span id="k3" class="key-badge sub-active">3</span>
+                        <span id="k4" class="key-badge">4</span>
+                        <span id="k5" class="key-badge">5</span>
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="control-group">
+                    <span class="group-label">Color</span>
+                    <div>
+                        <span id="kq" class="key-badge mode-active">Q</span>
+                        <span id="kw" class="key-badge">W</span>
+                        <span id="ke" class="key-badge">E</span>
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="control-group">
+                    <span class="group-label">BG</span>
+                    <div><span id="k0" class="key-badge">CAM</span></div>
+                </div>
+            </div>
+            <span id="instruction-text" class="status-text">SYSTEM READY</span>
+        </div>
+    </div>
+
+<script>
+    // --- 0. 基础环境 Polyfill (兼容旧浏览器) ---
+    window.requestAnimFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || function(cb){ setTimeout(cb, 1000/30); };
+    
+    // --- 1. 变量定义 ---
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d', {alpha: false}); // 优化性能
+    const instructionText = document.getElementById('instruction-text');
+    const bgKey = document.getElementById('k0');
+
+    let canvasW, canvasH, globalTime = 0;
+    const MODE = { STAGE_1: 1, STAGE_2: 2 };
+    let currentMode = MODE.STAGE_1;
+    let shapeType = 0; 
+    let colorType = 0; 
+    let particleType = 0; 
+    let isBlackBackground = false; 
+
+    // 状态管理
+    let s2State = 'IDLE'; 
+    let currentRotX = 0, targetRotX = 0, currentRotY = 0, targetRotY = 0;
+    let sparks = []; let textAlpha = 0;
+    let disperseStartTime = 0; let s2Cooldown = 0; 
+
+    // 粒子池
+    const MAX_PARTICLES = 2500;
+    const particlePool = [];
+    let activeParticleCount = 0;
+    const cachedAssets = {}; 
+    const RUNES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    
+    // 配置
+    const COLOR_THEMES = [
+        { name: "奇异金", hue: 35,  glow: '#ffaa00', text: 'rgba(255, 200, 100, 1)' },
+        { name: "量子蓝", hue: 190, glow: '#00eaff', text: 'rgba(100, 240, 255, 1)' },
+        { name: "猩红煞", hue: 0,   glow: '#ff2200', text: 'rgba(255, 100, 100, 1)' }
+    ];
+
+    const PARTICLE_CONFIG = [
+        { name: "爱心", text1: "老爸，刚吹了一阵风", text2: "是老爸的玉树临风 🕶️" },
+        { name: "星球", text1: "宇宙浩瀚无垠", text2: "唯你最为闪耀 ✨" },
+        { name: "花朵", text1: "送你一朵花...", text2: "随便花 🌸" }
+    ];
+
+    // --- 2. 初始化与事件 ---
+    function resize() { 
+        canvasW = window.innerWidth; canvasH = window.innerHeight; 
+        canvasElement.width = canvasW; canvasElement.height = canvasH; 
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 预加载逻辑
+    function initApp() {
+        const btn = document.getElementById('btn-start');
+        const msg = document.getElementById('loading-msg');
+        
+        // 预生成缓存
+        setTimeout(function() {
+            initParticlePool();
+            generateCache();
+            msg.innerText = "资源加载完毕";
+            btn.style.display = "block";
+        }, 100);
+
+        btn.onclick = function() {
+            document.getElementById('splash-screen').style.opacity = 0;
+            setTimeout(function(){ document.getElementById('splash-screen').style.display = 'none'; }, 500);
+            startCamera();
+        };
+    }
+
+    // --- 3. 缓存生成 (保留原版视觉逻辑) ---
+    function createOffscreenCanvas(size) { const c = document.createElement('canvas'); c.width = size; c.height = size; return { canvas: c, ctx: c.getContext('2d'), size: size, half: size/2 }; }
+    function drawPoly(ctx, r, sides) { ctx.beginPath(); ctx.moveTo(r, 0); for (let i = 1; i <= sides; i++) ctx.lineTo(r * Math.cos(i * 2 * Math.PI / sides), r * Math.sin(i * 2 * Math.PI / sides)); ctx.closePath(); ctx.stroke(); }
+
+    function preRenderPath(ctx, pathFunc, colorH, level) {
+        let lineWidth, opacity, blur, lightness;
+        switch(level) {
+            case 0: lineWidth = 12; opacity = 1.0; blur = 50; lightness = 95; break; 
+            case 1: lineWidth = 6; opacity = 0.9; blur = 30; lightness = 70; break;  
+            case 2: lineWidth = 3; opacity = 0.7; blur = 15; lightness = 55; break;  
+            case 3: lineWidth = 1; opacity = 0.8; blur = 5; lightness = 80; break;   
+        }
+        const c = "hsla(" + colorH + ", 100%";
+        ctx.shadowBlur = blur; ctx.shadowColor = c + ", 50%, 1)";
+        ctx.strokeStyle = c + ", " + (lightness-20) + "%, " + (opacity*0.5) + ")"; ctx.lineWidth = lineWidth * 2;
+        ctx.beginPath(); pathFunc(ctx); ctx.stroke();
+        ctx.shadowBlur = blur/2; ctx.strokeStyle = c + ", " + lightness + "%, " + opacity + ")"; ctx.lineWidth = lineWidth;
+        ctx.beginPath(); pathFunc(ctx); ctx.stroke();
+    }
+
+    function generateCache() {
+        const theme = COLOR_THEMES[colorType];
+        
+        // 曼陀罗外圈
+        let c = createOffscreenCanvas(900); let ctx = c.ctx; ctx.translate(450, 450);
+        ctx.shadowBlur = 15; ctx.shadowColor = theme.glow; ctx.strokeStyle = theme.text; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(0,0, 420, 0, Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.arc(0,0, 380, 0, Math.PI*2); ctx.stroke();
+        ctx.fillStyle = theme.text; ctx.font = "bold 24px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        for (let i = 0; i < 32; i++) { ctx.save(); ctx.rotate((i/32)*Math.PI*2); ctx.translate(400, 0); ctx.rotate(Math.PI/2); ctx.fillText(RUNES[i%RUNES.length], 0, 0); ctx.restore(); }
+        cachedAssets['mandala_outer'] = c;
+
+        // 简化的几何图形 (适配低端设备)
+        c = createOffscreenCanvas(600); ctx = c.ctx; ctx.translate(300, 300);
+        preRenderPath(ctx, function(tx) { drawPoly(tx, 220, 6); }, theme.hue, 2);
+        cachedAssets['mandala_hex'] = c;
+
+        c = createOffscreenCanvas(500); ctx = c.ctx; ctx.translate(250, 250);
+        preRenderPath(ctx, function(tx) { tx.arc(0,0, 160, 0, Math.PI*2); }, theme.hue, 1);
+        cachedAssets['mandala_core'] = c;
+
+        // 科技圈
+        c = createOffscreenCanvas(900); ctx = c.ctx; ctx.translate(450, 450);
+        preRenderPath(ctx, function(tx) { tx.arc(0,0, 400, 0, Math.PI*2); }, theme.hue, 2);
+        ctx.strokeStyle = theme.text; ctx.lineWidth = 4;
+        for(let i=0; i<60; i+=2) { ctx.save(); ctx.rotate(i*6*Math.PI/180); ctx.beginPath(); ctx.moveTo(400,0); ctx.lineTo(420,0); ctx.stroke(); ctx.restore(); }
+        cachedAssets['tech_outer'] = c;
+
+        // 混沌
+        for(let k=1; k<=3; k++) {
+            c = createOffscreenCanvas(600); ctx = c.ctx; ctx.translate(300, 300);
+            preRenderPath(ctx, function(tx) {
+                tx.beginPath();
+                const radius = 100 + k * 40;
+                for(let i=0; i<=30; i++) {
+                    const angle = (i/30) * Math.PI * 2;
+                    const r = radius + Math.random()*20;
+                    tx.lineTo(Math.cos(angle)*r, Math.sin(angle)*r);
+                }
+                tx.closePath();
+            }, theme.hue, 2);
+            cachedAssets['chaos_'+k] = c;
+        }
+    }
+
+    // --- 4. 粒子系统 ---
+    function Particle3D() { this.active = false; }
+    Particle3D.prototype.spawn = function(type) {
+        this.active = true; this.x=0; this.y=0; this.z=0;
+        this.vx=(Math.random()-0.5)*20; this.vy=(Math.random()-0.5)*20; this.vz=(Math.random()-0.5)*20;
+        this.size = 3 + Math.random() * 4;
+        const scale = canvasH / 25;
+        
+        if (type === 0) { // Heart
+            let t = Math.random() * Math.PI * 2; let z = (Math.random()*2)-1; let d = Math.cos(z*Math.PI*0.5);
+            this.tx = 16 * Math.pow(Math.sin(t), 3) * d * scale;
+            this.ty = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) * d * scale;
+            this.tz = z * 350;
+        } else if (type === 1) { // Planet
+            let theta = Math.random()*Math.PI*2; let phi = Math.acos(2*Math.random()-1); let r = 350;
+            this.tx = r*Math.sin(phi)*Math.cos(theta); this.ty = r*Math.sin(phi)*Math.sin(theta); this.tz = r*Math.cos(phi);
+        } else { // Flower
+            let u = Math.random()*Math.PI*2; let v = Math.random()*Math.PI; let rb = 400*(1+0.3*Math.cos(5*u)); let r = rb*Math.sin(v);
+            this.tx = r*Math.cos(u); this.ty = r*Math.sin(u); this.tz = 150*Math.cos(v)-(rb/400)*50;
+        }
+        this.ty -= canvasH * 0.05;
+    };
+    Particle3D.prototype.update = function(isDispersing, rX, rY) {
+        if (!this.active) return;
+        if (!isDispersing) {
+            let y1 = this.ty*Math.cos(rX) - this.tz*Math.sin(rX);
+            let z1 = this.ty*Math.sin(rX) + this.tz*Math.cos(rX);
+            let x2 = this.tx*Math.cos(rY) - z1*Math.sin(rY);
+            let z2 = this.tx*Math.sin(rY) + z1*Math.cos(rY);
+            this.x += (x2-this.x)*0.25; this.y += (y1-this.y)*0.25; this.z += (z2-this.z)*0.25;
+        } else {
+            this.x += this.vx*1.4; this.y += this.vy*1.4; this.z += this.vz*1.4;
+        }
+    };
+    Particle3D.prototype.draw = function(ctx, cx, cy, hue) {
+        if (!this.active) return;
+        const fl = 400; const scale = fl / (fl + this.z + 600);
+        if (scale < 0) return;
+        ctx.fillStyle = "hsla("+hue+", 90%, 60%, 1)";
+        const s = this.size * scale;
+        ctx.fillRect(cx + this.x*scale - s/2, cy + this.y*scale - s/2, s, s);
+    };
+
+    function initParticlePool() { for(let i=0; i<MAX_PARTICLES; i++) particlePool.push(new Particle3D()); }
+
+    // --- 5. 渲染循环 ---
+    function drawCache(ctx, key, x, y, angle, scale, alpha) {
+        const obj = cachedAssets[key]; if(!obj) return;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(angle); ctx.globalAlpha = alpha;
+        ctx.drawImage(obj.canvas, -obj.half*scale, -obj.half*scale, obj.size*scale, obj.size*scale);
+        ctx.restore();
+    }
+
+    function renderLoop(handsData) {
+        globalTime++;
+        
+        // 1. 绘制背景
+        if (isBlackBackground) {
+            canvasCtx.fillStyle = '#000'; canvasCtx.fillRect(0, 0, canvasW, canvasH);
+        } else {
+            canvasCtx.drawImage(videoElement, 0, 0, canvasW, canvasH);
+            canvasCtx.fillStyle = 'rgba(0,0,0,0.7)'; canvasCtx.fillRect(0,0,canvasW,canvasH);
+        }
+
+        // 2. 模式渲染
+        canvasCtx.globalCompositeOperation = 'lighter';
+        const time = globalTime * 0.02;
+        const theme = COLOR_THEMES[colorType];
+
+        if (currentMode === MODE.STAGE_1) {
+            handsData.forEach(function(hand) {
+                const x = hand.x; const y = hand.y; const s = hand.scale * 0.5;
+                if (shapeType === 0) {
+                    drawCache(canvasCtx, 'mandala_outer', x, y, -time*0.4, s*1.2, 0.8);
+                    drawCache(canvasCtx, 'mandala_hex', x, y, time*0.6, s*1.0, 0.9);
+                    drawCache(canvasCtx, 'mandala_core', x, y, time*0.8, s*0.8, 1.0);
+                } else if (shapeType === 1) {
+                    drawCache(canvasCtx, 'tech_outer', x, y, time*0.2, s*1.3, 0.8);
+                    drawCache(canvasCtx, 'mandala_core', x, y, -time*1.5, s*0.5, 1.0);
+                } else {
+                    for(let k=1; k<=3; k++) drawCache(canvasCtx, 'chaos_'+k, x, y, time*k, s*(1+k*0.2), 0.6);
+                }
+            });
+            instructionText.innerText = handsData.length === 0 ? "请伸出双手" : "";
+        } else {
+            // STAGE 2
+            if(s2Cooldown > 0) s2Cooldown--;
+            const hasTwoHands = handsData.length >= 2;
+            const cx = canvasW/2; const cy = canvasH/2;
+
+            if (hasTwoHands) {
+                targetRotY = (handsData[0].x - cx)/200; 
+                targetRotX = (handsData[0].y - cy)/200;
+            }
+            currentRotX += (targetRotX - currentRotX)*0.1; 
+            currentRotY += (targetRotY - currentRotY)*0.1;
+
+            if(s2State === 'IDLE' && hasTwoHands && s2Cooldown <= 0) {
+                s2State = 'STABLE'; activeParticleCount = 2000;
+                for(let i=0; i<activeParticleCount; i++) particlePool[i].spawn(particleType);
+            } else if (s2State === 'STABLE' && !hasTwoHands) {
+                s2State = 'DISPERSING'; disperseStartTime = Date.now();
+            }
+
+            if(s2State !== 'IDLE') {
+                let alpha = 1.0;
+                if(s2State === 'DISPERSING') {
+                    const elapsed = Date.now() - disperseStartTime;
+                    if(elapsed > 3000) alpha = 1 - (elapsed-3000)/1000;
+                    if(elapsed > 4000) { s2State = 'IDLE'; s2Cooldown = 60; }
+                }
+                
+                canvasCtx.globalAlpha = alpha;
+                for(let i=0; i<activeParticleCount; i++) {
+                    const p = particlePool[i];
+                    p.update(s2State === 'DISPERSING', currentRotX, currentRotY);
+                    p.draw(canvasCtx, cx, cy, theme.hue);
+                }
+                canvasCtx.globalAlpha = 1.0;
+
+                // 文字
+                const txt = PARTICLE_CONFIG[particleType];
+                canvasCtx.fillStyle = "rgba(255,255,255," + alpha + ")";
+                canvasCtx.font = "bold 30px sans-serif"; canvasCtx.textAlign = "center";
+                if(s2State === 'STABLE') canvasCtx.fillText(txt.text1, cx, cy-300);
+                else if(s2State === 'DISPERSING') {
+                    canvasCtx.font = "bold 40px sans-serif";
+                    canvasCtx.fillText(txt.text2, cx, cy);
+                }
+            }
+            instructionText.innerText = s2State === 'IDLE' ? "双手合拢凝聚" : "";
+        }
+        canvasCtx.globalCompositeOperation = 'source-over';
+    }
+
+    // --- 6. 摄像头与 AI 核心 (修复重点) ---
+    function startCamera() {
+        // 兼容性 getUserMedia (去除 async/await，使用 Promise)
+        const constraints = { audio: false, video: { facingMode: 'user', width: 1280, height: 720 } };
+        
+        navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+            videoElement.srcObject = stream;
+            videoElement.play();
+            
+            // 初始化 Hands，2. 核心修复：锁死 CDN 版本
+            const hands = new Hands({locateFile: function(file) {
+                // 强制指向 0.4.1646424915 版本，防止 404 或 Buffer 错误
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+            }});
+            
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            
+            hands.onResults(onResults);
+            
+            // 手动循环发送帧，完全去除 async/await
+            function sendFrame() {
+                if (!videoElement.paused && !videoElement.ended) {
+                    hands.send({image: videoElement}).then(function() {
+                        // 成功处理
+                    }).catch(function(err) {
+                        console.log("Frame skipped", err);
+                    });
+                }
+                requestAnimationFrame(sendFrame);
+            }
+            sendFrame();
+
+        }).catch(function(err) {
+            console.error(err);
+            alert("摄像头启动失败: " + err.message);
+        });
+    }
+
+    function onResults(results) {
+        const handsData = [];
+        if (results.multiHandLandmarks) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const lm = results.multiHandLandmarks[i];
+                // 简单的深度映射
+                const d = Math.abs(lm[0].x - lm[9].x);
+                const s = Math.max(0.5, Math.min(2.5, d/0.12));
+                handsData.push({ x: lm[9].x * canvasW, y: lm[9].y * canvasH, scale: s });
+            }
+        }
+        renderLoop(handsData);
+    }
+
+    // --- 7. UI 交互 ---
+    function updateUI() {
+        function setCls(id, active, type) { document.getElementById(id).className = `key-badge ${active?type:''}`; }
+        setCls('k1', currentMode===1, 'mode-active');
+        setCls('k2', currentMode===2, 'mode-active');
+        
+        const isS1 = currentMode===1;
+        setCls('k3', (isS1 && shapeType===0)||(!isS1 && particleType===0), 'sub-active');
+        setCls('k4', (isS1 && shapeType===1)||(!isS1 && particleType===1), 'sub-active');
+        setCls('k5', (isS1 && shapeType===2)||(!isS1 && particleType===2), 'sub-active');
+        
+        setCls('kq', colorType===0, 'mode-active');
+        setCls('kw', colorType===1, 'mode-active');
+        setCls('ke', colorType===2, 'mode-active');
+        setCls('k0', isBlackBackground, 'bg-active');
+        
+        generateCache(); // 重新生成颜色
+    }
+
+    // 绑定点击
+    function bind(id, fn) { document.getElementById(id).onclick = fn; }
+    
+    bind('k1', function(){ currentMode=1; isBlackBackground=false; updateUI(); });
+    bind('k2', function(){ currentMode=2; isBlackBackground=true; s2State='IDLE'; updateUI(); });
+    
+    bind('k3', function(){ if(currentMode===1)shapeType=0; else {particleType=0;s2State='IDLE';} updateUI(); });
+    bind('k4', function(){ if(currentMode===1)shapeType=1; else {particleType=1;s2State='IDLE';} updateUI(); });
+    bind('k5', function(){ if(currentMode===1)shapeType=2; else {particleType=2;s2State='IDLE';} updateUI(); });
+    
+    bind('kq', function(){ colorType=0; updateUI(); });
+    bind('kw', function(){ colorType=1; updateUI(); });
+    bind('ke', function(){ colorType=2; updateUI(); });
+    bind('k0', function(){ isBlackBackground=!isBlackBackground; updateUI(); });
+
+    // 启动
+    initApp();
+
+</script>
+</body>
+</html>
