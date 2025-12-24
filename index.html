@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>K12编程 - 奇异博士：全交互版 (Chrome 52 Compatible)</title>
+    <title>K12编程 - 奇异博士：全交互版 (Optimized)</title>
     <style>
         /* 增加 touch-action: none 防止手机端双击缩放或滚动 */
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; }
@@ -137,8 +136,11 @@
     }
 
     // ==========================================
-    // 核心逻辑
+    // 核心逻辑 (含性能优化)
     // ==========================================
+
+    // [优化] 检测是否为低端设备或移动端
+    const isLowSpec = window.innerWidth < 900 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
     const videoElement = document.getElementById('input_video');
     const canvasElement = document.getElementById('output_canvas');
@@ -147,12 +149,17 @@
     const instructionText = document.getElementById('instruction-text');
     const bgKey = document.getElementById('k0');
 
+    // [优化] 检查 HTTPS，防止摄像头被浏览器拦截
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        alert("⚠️ 重要提示：\n当前链接非 HTTPS 安全链接。\n大多数浏览器将无法启动摄像头！\n请确保使用 https:// 访问。");
+    }
+
     let canvasW, canvasH, globalTime = 0;
     const MODE = { STAGE_1: 1, STAGE_2: 2 };
     let currentMode = MODE.STAGE_1;
-    let shapeType = 0; // 0,1,2 for Stage 1
-    let colorType = 0; // 0,1,2
-    let particleType = 0; // 0,1,2 for Stage 2 (Mapped to keys 3,4,5 now!)
+    let shapeType = 0; 
+    let colorType = 0; 
+    let particleType = 0; 
     let isBlackBackground = false; 
 
     // 二阶段变量
@@ -162,8 +169,9 @@
     let disperseStartTime = 0; 
     let s2Cooldown = 0; 
 
-    // 对象池
-    const MAX_PARTICLES = 2500;
+    // [优化] 对象池：根据设备性能决定池大小
+    // 老设备 1200 个，新设备 2500 个
+    const MAX_PARTICLES = isLowSpec ? 1200 : 2500;
     const particlePool = [];
     let activeParticleCount = 0;
 
@@ -211,7 +219,7 @@
 
     function generateCache() {
         const theme = COLOR_THEMES[colorType];
-        
+        // 缓存生成逻辑保持不变
         let c = createOffscreenCanvas(900); let ctx = c.ctx; ctx.translate(450, 450);
         ctx.shadowBlur = 15; ctx.shadowColor = theme.glow; ctx.strokeStyle = theme.text; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.arc(0,0, 420, 0, Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.arc(0,0, 380, 0, Math.PI*2); ctx.stroke();
@@ -466,7 +474,8 @@
             if (hand.active) {
                 canvasCtx.globalCompositeOperation = 'lighter';
                 const r = 400 * S; 
-                const count = 40; 
+                // [优化] 减少每帧生成的火花粒子数量
+                const count = isLowSpec ? 15 : 40; 
                 for(let i=0; i<count; i++) {
                     const angle = Math.random() * Math.PI * 2;
                     const px = pos.x + Math.cos(angle) * r; const py = pos.y + Math.sin(angle) * r;
@@ -495,7 +504,11 @@
         
         if (s2State === 'IDLE' && hasTwoHands && s2Cooldown <= 0) { 
             s2State = 'STABLE'; 
-            activeParticleCount = 2200; // 粒子数增加到2200
+            // [优化] 动态设置粒子数，防止低端机过载
+            activeParticleCount = isLowSpec ? 1000 : 2200; 
+            // 确保不越界
+            if (activeParticleCount > particlePool.length) activeParticleCount = particlePool.length;
+
             for(let i=0; i<activeParticleCount; i++) particlePool[i].spawn(particleType);
             textAlpha = 0; 
         }
@@ -581,7 +594,6 @@
         }
     }
 
-    // === 核心逻辑修改：统一输入处理函数 ===
     function handleInput(key) {
         const k = key.toLowerCase();
         
@@ -613,11 +625,8 @@
         }
     }
 
-    // 1. 键盘监听
     window.addEventListener('keydown', (e) => handleInput(e.key));
 
-    // 2. 鼠标/触摸监听 (新增功能)
-    // 建立 ID 与 键盘按键 的映射关系
     const clickMap = {
         'k1': '1', 'k2': '2',
         'k3': '3', 'k4': '4', 'k5': '5',
@@ -625,14 +634,13 @@
         'k0': '0'
     };
 
-    // 遍历所有按钮并绑定点击事件
     Object.keys(clickMap).forEach(id => {
         const el = document.getElementById(id);
         if(el) {
             el.addEventListener('click', (e) => {
-                e.preventDefault(); // 防止双击缩放等副作用
-                e.stopPropagation(); // 防止事件穿透
-                handleInput(clickMap[id]); // 调用核心逻辑
+                e.preventDefault(); 
+                e.stopPropagation();
+                handleInput(clickMap[id]); 
             });
         }
     });
@@ -679,21 +687,36 @@
     }
 
     const hands = new Hands({
-        // 兼容性修改：锁定版本防止 404
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
     });
-    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5, selfieMode: true });
+    
+    // [优化] 核心模型配置调整
+    hands.setOptions({ 
+        maxNumHands: 2, 
+        modelComplexity: 0, // <--- 关键修改：从 1 改为 0 (Lite 模型，极大提升速度)
+        minDetectionConfidence: 0.5, 
+        minTrackingConfidence: 0.5, 
+        selfieMode: true 
+    });
     hands.onResults(onResults);
     
     const camera = new Camera(videoElement, { 
-        // 兼容性修改：移除 async/await
         onFrame: function() { 
             return hands.send({image: videoElement}); 
         }, 
-        width: 1280, 
-        height: 720 
+        width: 480, // <--- 关键修改：从 1280 降级为 480
+        height: 360 // <--- 关键修改：从 720 降级为 360
     });
-    camera.start();
+    
+    // [优化] 增加启动错误处理
+    try {
+        camera.start().catch(err => {
+            console.error(err);
+            alert("摄像头启动失败！\n请检查：\n1. 浏览器是否允许摄像头权限\n2. 设备是否连接了摄像头\n3. 是否被其他程序占用");
+        });
+    } catch (e) {
+        console.error("Camera init failed:", e);
+    }
 </script>
 </body>
 </html>
