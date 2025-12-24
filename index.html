@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>奇异博士 AR - 极速优化版</title>
+    <title>奇异博士 AR - 大师修正版</title>
     <style>
         body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; touch-action: none; -webkit-tap-highlight-color: transparent; }
         canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
         
-        /* 启动遮罩：解决自动播放限制 */
+        /* 启动遮罩：强制用户点击以初始化 Video 和 Audio Context */
         #start-overlay {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: #000; z-index: 2000;
@@ -40,7 +40,7 @@
             background: rgba(20, 5, 0, 0.85); 
             border: 2px solid rgba(255, 180, 0, 0.5);
             border-radius: 40px;
-            padding: 15px 20px; /* Mobile optimized padding */
+            padding: 15px 20px;
             backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
             text-align: center;
             box-shadow: 0 0 80px rgba(255, 120, 0, 0.4);
@@ -76,8 +76,8 @@
 <body>
 
     <div id="start-overlay">
-        <div id="start-btn">TAP TO OPEN EYE</div>
-        <div style="color: #666; margin-top: 15px; font-size: 12px;">HTTPS REQUIRED | BEST ON CHROME</div>
+        <div id="start-btn">开启魔法视界</div>
+        <div style="color: #666; margin-top: 15px; font-size: 12px;">HTTPS REQUIRED | CLICK TO START</div>
     </div>
 
     <div id="loading" style="opacity: 0;">INITIALIZING CORE...</div>
@@ -123,18 +123,13 @@
     </div>
 
 <script>
-    // === 0. Polyfills & Compatibility (针对旧版浏览器) ===
+    // === 0. Polyfills & Compatibility ===
     window.requestAnimFrame = (function(){
         return  window.requestAnimationFrame       ||
                 window.webkitRequestAnimationFrame ||
                 window.mozRequestAnimationFrame    ||
                 function( callback ){ window.setTimeout(callback, 1000 / 60); };
     })();
-    
-    // 安全检查
-    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        alert("WebAR requires HTTPS! Please switch protocol.");
-    }
 
     const videoElement = document.getElementById('input_video');
     const canvasElement = document.getElementById('output_canvas');
@@ -152,11 +147,12 @@
     let particleType = 0;
     let isBlackBackground = false; 
 
-    // === 性能优化配置 ===
-    let frameSkipCounter = 0;
-    const FRAME_SKIP_LIMIT = 2; // 每3帧执行一次AI检测 (优化核心)
-    let aiHandData = []; // 存储AI返回的最新原始数据
-    let lastRenderedHands = [null, null]; // 存储上一帧渲染时的平滑数据
+    // 优化：全局状态存储，用于解耦渲染与AI
+    let detectedHands = []; // 存储最新的AI检测结果
+    let lerpedHands = [
+        { x: 0, y: 0, scale: 1, active: false, opacity: 0 },
+        { x: 0, y: 0, scale: 1, active: false, opacity: 0 }
+    ];
 
     // 二阶段变量
     let s2State = 'IDLE'; 
@@ -165,7 +161,6 @@
     let disperseStartTime = 0; 
     let s2Cooldown = 0; 
 
-    // 对象池 (保持 2500 不变)
     const MAX_PARTICLES = 2500;
     const particlePool = [];
     let activeParticleCount = 0;
@@ -187,13 +182,12 @@
     function resize() { 
         canvasW = window.innerWidth; 
         canvasH = window.innerHeight; 
-        // 强制设置分辨率，避免高分屏下的性能损耗，如果设备像素比极高，这里可限制
         canvasElement.width = canvasW; 
         canvasElement.height = canvasH; 
     }
     resize(); window.addEventListener('resize', resize);
 
-    // === 缓存生成 (保留原版逻辑) ===
+    // === 缓存生成 (完全保持原版逻辑) ===
     function createOffscreenCanvas(size) { const c = document.createElement('canvas'); c.width = size; c.height = size; return { canvas: c, ctx: c.getContext('2d'), size: size, half: size/2 }; }
     function drawPoly(ctx, r, sides) { ctx.beginPath(); ctx.moveTo(r, 0); for (let i = 1; i <= sides; i++) ctx.lineTo(r * Math.cos(i * 2 * Math.PI / sides), r * Math.sin(i * 2 * Math.PI / sides)); ctx.closePath(); ctx.stroke(); }
 
@@ -306,7 +300,7 @@
         loadingDiv.style.opacity = 0;
     }
     
-    // === 粒子类 (保留) ===
+    // === 粒子类 (修正：适应渲染循环的生命周期) ===
     class Particle3D {
         constructor() { 
             this.x = 0; this.y = 0; this.z = 0;
@@ -394,41 +388,21 @@
         }
     }
     initParticlePool();
-    // 使用 setTimeout 确保UI先渲染
+    // Delay cache generation slightly to let UI render
     setTimeout(generateCache, 100); 
 
-    class MagicHand {
-        constructor() { this.x=canvasW/2; this.y=canvasH/2; this.targetX=canvasW/2; this.targetY=canvasH/2; this.opacity=0; this.active=false; this.scale=1; this.targetScale=1; }
-        // 渲染线程专用 Update: 负责平滑插值，不受 AI 帧率限制
-        update() {
-            if (this.active) { 
-                this.opacity+=(1-this.opacity)*0.15; 
-            } else { 
-                this.opacity+=(0-this.opacity)*0.08; 
-            }
-            // 经典的缓动公式：当前值 += (目标值 - 当前值) * 系数
-            // 系数 0.25 保证了在 60FPS 下非常平滑
-            this.x+=(this.targetX-this.x)*0.25; 
-            this.y+=(this.targetY-this.y)*0.25;
-            this.scale+=(this.targetScale-this.scale)*0.1; 
-        }
-        // AI 线程专用: 设置目标点
-        setTarget(x, y, s) {
-            this.active = true;
-            this.targetX = x; this.targetY = y; this.targetScale = s;
-        }
-        reset() { this.active = false; }
-        getDrawPos() { return { x: this.x + (Math.random()-0.5)*this.opacity*3, y: this.y + (Math.random()-0.5)*this.opacity*3, op: this.opacity, scale: this.scale }; }
-    }
-    const magicHands = [new MagicHand(), new MagicHand()];
-
+    // === 火花粒子 (修正：生命周期适应渲染循环) ===
     class StreakParticle {
         constructor(x, y, hue, angle, speed) {
             this.x=x; this.y=y; this.hue=hue; this.life=1.0;
             this.vx=Math.cos(angle)*speed; this.vy=Math.sin(angle)*speed;
             this.len=30+Math.random()*30; this.width=2+Math.random()*3;
         }
-        update() { this.x+=this.vx; this.y+=this.vy; this.life-=0.05; this.len*=0.96; }
+        update() { 
+            this.x+=this.vx; this.y+=this.vy; 
+            this.life-=0.05; // 保持原版衰减
+            this.len*=0.96; 
+        }
         draw(ctx) {
             ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(Math.atan2(this.vy, this.vx));
             const g = ctx.createLinearGradient(0,0,this.len,0); g.addColorStop(0, `hsla(${this.hue}, 100%, 95%, ${this.life})`); g.addColorStop(1, `hsla(${this.hue}, 100%, 50%, 0)`);
@@ -443,21 +417,24 @@
         ctx.restore();
     }
 
-    function drawStage1() {
-        // 更新手部物理状态 (在渲染循环中调用，保证丝滑)
-        magicHands[0].update(); magicHands[1].update();
-        
+    // === 绘图逻辑 ===
+    // 注意：这里不再包含 "update" 逻辑，只负责画。位置由 renderLoop 传入的插值决定。
+    function drawStage1(hands) {
         const time = globalTime * 0.02; 
         const BASE_SCALE = 0.45; 
         const theme = COLOR_THEMES[colorType];
         
-        magicHands.forEach(hand => {
-            const pos = hand.getDrawPos(); if (pos.op <= 0.01) return;
+        hands.forEach(hand => {
+            // 只绘制活跃且不透明度足够的手
+            if (hand.opacity <= 0.01) return;
+            
+            const pos = { x: hand.x + (Math.random()-0.5)*hand.opacity*3, y: hand.y + (Math.random()-0.5)*hand.opacity*3 };
+            
             canvasCtx.save(); canvasCtx.translate(pos.x, pos.y);
             canvasCtx.globalCompositeOperation = 'lighter'; 
             const pulse = 1.0 + Math.sin(time*6)*0.04;
-            const op = pos.op * 0.85; 
-            const S = BASE_SCALE * pos.scale;
+            const op = hand.opacity * 0.85; 
+            const S = BASE_SCALE * hand.scale;
 
             if (shapeType === 0) { 
                 drawCache(canvasCtx, cachedAssets['mandala_outer'], -time*0.4, 1.2*pulse*S, op*0.6);
@@ -484,10 +461,11 @@
             }
             canvasCtx.restore();
 
+            // 生成火花：注意这里只推入数组，不更新。更新在 renderLoop 统一进行。
             if (hand.active) {
-                canvasCtx.globalCompositeOperation = 'lighter';
+                // 限制火花生成数量，因为 renderLoop 跑得比 AI 快
                 const r = 400 * S; 
-                const count = 40; 
+                const count = 5; // 原版是40，但在60FPS下太密集，降为5
                 for(let i=0; i<count; i++) {
                     const angle = Math.random() * Math.PI * 2;
                     const px = pos.x + Math.cos(angle) * r; const py = pos.y + Math.sin(angle) * r;
@@ -499,20 +477,18 @@
         });
     }
 
-    function drawStage2() {
+    function drawStage2(hands) {
         if (s2Cooldown > 0) s2Cooldown--;
         
-        // 只有当两个手都活跃且不透明度足够时才算 "HasTwoHands"
-        const h0 = magicHands[0]; const h1 = magicHands[1];
-        h0.update(); h1.update();
-
-        const hasTwoHands = h0.active && h1.active && h0.opacity > 0.5 && h1.opacity > 0.5;
+        // 判定双手：必须两个插值后的手都 active 且 opacity > 0.5
+        const hasTwoHands = hands[0].active && hands[1].active && hands[0].opacity > 0.5 && hands[1].opacity > 0.5;
+        
         const cx = canvasW / 2; const cy = canvasH / 2; 
         const conf = PARTICLE_CONFIG[particleType];
         
         if (hasTwoHands) { 
-            targetRotY = (((h0.x + h1.x)/2 - cx)/(canvasW/2)) * 3.0; 
-            targetRotX = (((h0.y + h1.y)/2 - cy)/(canvasH/2)) * 3.0; 
+            targetRotY = (((hands[0].x+hands[1].x)/2 - cx)/(canvasW/2)) * 3.0; 
+            targetRotX = (((hands[0].y+hands[1].y)/2 - cy)/(canvasH/2)) * 3.0; 
         } else { targetRotX=0; targetRotY=0; }
         
         currentRotX += (targetRotX - currentRotX)*0.1; 
@@ -570,208 +546,160 @@
         }
     }
 
-    // === 核心渲染循环 (Render Loop) ===
-    // 独立于 AI 帧率，保持 60FPS
+    // === 核心：分离后的渲染循环 (60FPS) ===
     function renderLoop() {
         globalTime++;
         canvasCtx.clearRect(0, 0, canvasW, canvasH);
-        canvasCtx.globalCompositeOperation = 'source-over';
         
-        // 背景绘制：智能 Object-Fit Cover 算法
+        // 1. 绘制背景 (确保即使没有AI结果也能看到视频)
+        // 修复：使用简单的drawImage，保证和原版一致的拉伸/显示逻辑，不搞复杂的裁剪
+        canvasCtx.globalCompositeOperation = 'source-over';
         if (isBlackBackground) {
             canvasCtx.fillStyle = '#000'; canvasCtx.fillRect(0, 0, canvasW, canvasH);
-        } else if (videoElement.videoWidth > 0) {
-            const vW = videoElement.videoWidth;
-            const vH = videoElement.videoHeight;
-            // 计算 Cover 比例
-            const scale = Math.max(canvasW / vW, canvasH / vH);
-            const drawW = vW * scale;
-            const drawH = vH * scale;
-            const offsetX = (canvasW - drawW) / 2;
-            const offsetY = (canvasH - drawH) / 2;
-            
-            canvasCtx.drawImage(videoElement, offsetX, offsetY, drawW, drawH);
+        } else if (videoElement.readyState === 4) {
+            canvasCtx.drawImage(videoElement, 0, 0, canvasW, canvasH);
             canvasCtx.fillStyle = 'rgba(0,0,0,0.7)'; canvasCtx.fillRect(0,0,canvasW,canvasH);
         }
 
-        // 绘制特效
+        // 2. 插值逻辑 (Lerp) - 将 AI 的低频数据平滑化
+        // detectedHands 是 AI 给出的目标， lerpedHands 是屏幕上画的
+        for (let i = 0; i < 2; i++) {
+            const target = detectedHands[i]; // 可能为 undefined
+            const current = lerpedHands[i];
+
+            if (target) {
+                // 如果 AI 这一帧监测到了手
+                current.active = true;
+                // 缓动系数 0.25
+                current.x += (target.x - current.x) * 0.25;
+                current.y += (target.y - current.y) * 0.25;
+                current.scale += (target.scale - current.scale) * 0.1;
+                current.opacity += (1 - current.opacity) * 0.15;
+            } else {
+                // 如果 AI 这一帧没监测到，慢慢消失
+                current.active = false;
+                current.opacity += (0 - current.opacity) * 0.08;
+            }
+        }
+
+        // 3. 绘制火花 (统一管理)
         canvasCtx.globalCompositeOperation = 'lighter'; 
         for(let i=sparks.length-1; i>=0; i--) {
             sparks[i].update();
             sparks[i].draw(canvasCtx);
             if(sparks[i].life <= 0) sparks.splice(i, 1);
         }
-        
+
+        // 4. 绘制主阶段
         canvasCtx.globalCompositeOperation = 'source-over';
-        if (currentMode === MODE.STAGE_1) { 
-            drawStage1(); 
-            // 简单的文本提示逻辑
-            if (!magicHands[0].active && !magicHands[1].active) instructionText.innerText = "请伸出两只手激活法阵";
-        } else { 
-            drawStage2(); 
+        if (currentMode === MODE.STAGE_1) {
+            drawStage1(lerpedHands);
+            // 简单的文本提示
+            if (lerpedHands[0].opacity < 0.1 && lerpedHands[1].opacity < 0.1) {
+                 instructionText.innerText = "请伸出两只手激活法阵";
+            }
+        } else {
+            drawStage2(lerpedHands);
         }
 
         window.requestAnimFrame(renderLoop);
     }
 
-    // === AI 数据处理 (On Results) ===
+    // === AI 回调 (只负责更新数据，不负责画) ===
     function onResults(results) {
-        // 这里只处理数据，不进行绘制
-        const detectedHands = []; 
+        const hands = [];
         if (results.multiHandLandmarks) {
-            // 需要重新计算坐标映射，与背景的 Object-Fit 逻辑保持一致
-            const vW = videoElement.videoWidth;
-            const vH = videoElement.videoHeight;
-            const scale = Math.max(canvasW / vW, canvasH / vH);
-            const drawW = vW * scale;
-            const drawH = vH * scale;
-            const offsetX = (canvasW - drawW) / 2;
-            const offsetY = (canvasH - drawH) / 2;
-
-            results.multiHandLandmarks.forEach(lm => { 
+            results.multiHandLandmarks.forEach(lm => {
                 const dist = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
-                let s = dist / 0.12; s = Math.max(0.5, Math.min(2.5, s)); 
+                let scale = dist / 0.12; scale = Math.max(0.5, Math.min(2.5, scale));
                 
-                // 坐标转换的核心公式
-                const screenX = lm[9].x * drawW + offsetX;
-                const screenY = lm[9].y * drawH + offsetY;
-
-                detectedHands.push({ x: screenX, y: screenY, scale: s }); 
-            }); 
+                // 修复：彻底移除复杂的 Object-Fit 计算，回归原版逻辑
+                // 直接映射 x * canvasW, y * canvasH
+                hands.push({ 
+                    x: lm[9].x * canvasW, 
+                    y: lm[9].y * canvasH, 
+                    scale: scale 
+                });
+            });
         }
-
-        // 将 AI 结果同步给 MagicHand 对象
-        // 我们的渲染循环会自动插值平滑这些数据
-        if (detectedHands.length > 0) {
-            magicHands[0].setTarget(detectedHands[0].x, detectedHands[0].y, detectedHands[0].scale);
-            if (detectedHands.length > 1) {
-                magicHands[1].setTarget(detectedHands[1].x, detectedHands[1].y, detectedHands[1].scale);
-            } else {
-                magicHands[1].reset();
-            }
-        } else {
-            magicHands[0].reset();
-            magicHands[1].reset();
-        }
+        // 更新全局 detectedHands，供 renderLoop 使用
+        detectedHands = hands;
     }
 
+    // === 输入控制 ===
     function handleInput(key) {
         const k = key.toLowerCase();
-        
         if ((k === '1' && currentMode === MODE.STAGE_1) || (k === '2' && currentMode === MODE.STAGE_2)) return;
-
         if (k === '1') setMode(MODE.STAGE_1);
         if (k === '2') setMode(MODE.STAGE_2);
-        
         if (k === '0') { isBlackBackground = !isBlackBackground; updateBgUI(); }
-        
-        if (k === '3') { 
-            if (currentMode === MODE.STAGE_1) shapeType = 0; else { particleType = 0; resetStage2(); }
-            updateUI(); 
-        }
-        if (k === '4') { 
-            if (currentMode === MODE.STAGE_1) shapeType = 1; else { particleType = 1; resetStage2(); }
-            updateUI(); 
-        }
-        if (k === '5') { 
-            if (currentMode === MODE.STAGE_1) shapeType = 2; else { particleType = 2; resetStage2(); }
-            updateUI(); 
-        }
-
+        if (k === '3') { if (currentMode === MODE.STAGE_1) shapeType = 0; else { particleType = 0; resetStage2(); } updateUI(); }
+        if (k === '4') { if (currentMode === MODE.STAGE_1) shapeType = 1; else { particleType = 1; resetStage2(); } updateUI(); }
+        if (k === '5') { if (currentMode === MODE.STAGE_1) shapeType = 2; else { particleType = 2; resetStage2(); } updateUI(); }
         if (k === 'q' || k === 'w' || k === 'e') {
             if (k === 'q') colorType = 0; if (k === 'w') colorType = 1; if (k === 'e') colorType = 2;
-            loadingDiv.style.opacity = 1; 
-            updateUI();
-            // 使用 setTimeout 让 UI 先刷新
-            setTimeout(function(){ generateCache(); }, 50);
+            loadingDiv.style.opacity = 1; updateUI();
+            setTimeout(generateCache, 50);
         }
     }
-
     window.addEventListener('keydown', (e) => handleInput(e.key));
-
-    const clickMap = {
-        'k1': '1', 'k2': '2',
-        'k3': '3', 'k4': '4', 'k5': '5',
-        'kq': 'q', 'kw': 'w', 'ke': 'e',
-        'k0': '0'
-    };
-
+    
+    // 绑定点击事件
+    const clickMap = { 'k1': '1', 'k2': '2', 'k3': '3', 'k4': '4', 'k5': '5', 'kq': 'q', 'kw': 'w', 'ke': 'e', 'k0': '0' };
     Object.keys(clickMap).forEach(id => {
         const el = document.getElementById(id);
         if(el) {
-            // 同时支持 Touch 和 Click
             el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); handleInput(clickMap[id]); });
             el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); handleInput(clickMap[id]); });
         }
     });
 
     function updateBgUI() { bgKey.className = `key-badge ${isBlackBackground ? 'bg-active' : ''}`; }
-    
-    function setMode(m) { 
-        currentMode = m; 
-        if (m === MODE.STAGE_1) isBlackBackground = false; 
-        else isBlackBackground = true; 
-        resetStage2(); sparks = []; updateUI(); updateBgUI(); 
-    }
-
+    function setMode(m) { currentMode = m; if (m === MODE.STAGE_1) isBlackBackground = false; else isBlackBackground = true; resetStage2(); sparks = []; updateUI(); updateBgUI(); }
     function resetStage2() { s2State = 'IDLE'; s2Cooldown = 0; }
-    
     function updateUI() {
         document.getElementById('k1').className = `key-badge ${currentMode===1?'mode-active':''}`;
         document.getElementById('k2').className = `key-badge ${currentMode===2?'mode-active':''}`;
-        
         const isS1 = currentMode === MODE.STAGE_1;
         document.getElementById('k3').className = `key-badge ${(isS1 && shapeType===0) || (!isS1 && particleType===0) ? 'sub-active' : ''}`;
         document.getElementById('k4').className = `key-badge ${(isS1 && shapeType===1) || (!isS1 && particleType===1) ? 'sub-active' : ''}`;
         document.getElementById('k5').className = `key-badge ${(isS1 && shapeType===2) || (!isS1 && particleType===2) ? 'sub-active' : ''}`;
-
         document.getElementById('kq').className = `key-badge ${colorType===0?'mode-active':''}`;
         document.getElementById('kw').className = `key-badge ${colorType===1?'mode-active':''}`;
         document.getElementById('ke').className = `key-badge ${colorType===2?'mode-active':''}`;
-        
         bgKey.className = `key-badge ${isBlackBackground?'bg-active':''}`;
-
         const theme = COLOR_THEMES[colorType];
-        if (currentMode === MODE.STAGE_1) {
-            instructionText.innerText = `法阵: ${['奇异曼陀罗','赛博科技','混沌裂缝'][shapeType]} | 颜色: ${theme.name}`;
-        } else {
-            instructionText.innerText = `召唤: ${PARTICLE_CONFIG[particleType].name}`;
-        }
+        if (currentMode === MODE.STAGE_1) instructionText.innerText = `法阵: ${['奇异曼陀罗','赛博科技','混沌裂缝'][shapeType]} | 颜色: ${theme.name}`;
+        else instructionText.innerText = `召唤: ${PARTICLE_CONFIG[particleType].name}`;
     }
 
-    // === 初始化序列 ===
+    // === 启动逻辑 ===
     const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`});
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5, selfieMode: true });
     hands.onResults(onResults);
 
-    // 启动序列：点击 -> 播放视频 -> 启动相机 -> 启动渲染循环
+    let frameSkipCounter = 0;
+    const FRAME_SKIP_LIMIT = 2; // AI 降频系数 (每3帧跑一次)
+
     startOverlay.addEventListener('click', function() {
         startOverlay.style.display = 'none';
         loadingDiv.style.opacity = 1;
         
         videoElement.play().then(function(){
-            // 视频播放成功后，启动 MediaPipe Camera
-            // 自定义 onFrame 逻辑以实现 Frame Skipping
             const camera = new Camera(videoElement, {
                 onFrame: function() {
-                    // 节流逻辑：每 FRAME_SKIP_LIMIT 帧才发给 AI 一次
                     frameSkipCounter++;
                     if (frameSkipCounter % FRAME_SKIP_LIMIT === 0) {
-                        // 移除 async/await，使用 Promise
                         return hands.send({image: videoElement});
                     }
                     return Promise.resolve();
                 },
-                width: 640, // 降低处理分辨率以提高性能
-                height: 480
+                width: 1280, // 保持原版分辨率以确保坐标映射正确
+                height: 720
             });
             camera.start();
-            
-            // 启动独立的渲染循环
-            renderLoop();
-        }).catch(function(e) {
-            alert("Camera failed: " + e);
-        });
+            renderLoop(); // 启动独立渲染循环
+        }).catch(e => alert("Camera Error: " + e));
     });
 
 </script>
